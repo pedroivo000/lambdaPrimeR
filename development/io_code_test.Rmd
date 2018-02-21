@@ -1,0 +1,41 @@
+---
+title: "IO"
+output: html_notebook
+---
+
+# Packages and global options
+
+```{r packages}
+library(tidyverse)
+# library(Biostrings)
+library(devtools)
+library(stringr)
+```
+
+
+# Importing sequences
+
+The most basic function of this app is importing a sequence file on FASTA format. The imported file can either be the *template* sequence or the *target* sequence. The target sequence is the DNA sequence of the gene of interest that will be inserted into the template sequence. We can create a basic function to import a DNA sequence with two derived functions, one for each type of input:
+
+```{r read-sequence-fun}
+read_sequence <- function(file, ...) {
+  raw <- as_data_frame(read_file(file))
+  
+  df <-raw %>%
+    separate_rows(value, sep = '\n>') %>%
+    separate(value, into = c('header', 'seq'), sep = '\n', extra = 'merge') %>%
+    mutate(
+      seq = str_replace_all(seq, '\n', ''),
+      header = str_replace(header, '>', '')
+    )
+}
+
+template <- read_sequence("../data/puc19.fasta")
+target <- read_sequence("../data/GFP sequence.fasta")
+```
+
+# Case 1: insertion of target sequence into template 
+
+We can 
+
+
