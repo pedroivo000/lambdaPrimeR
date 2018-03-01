@@ -1,0 +1,228 @@
+---
+title: "Development records notebook"
+author: "Pedro Ivo Guimarães"
+description: LambdaPCR development archiving notebook
+output: html_notebook
+---
+
+# February 
+
+## Packages and global options
+
+```{r packages}
+library(tidyverse)
+# library(Biostrings)
+library(devtools)
+library(stringr)
+```
+
+## 02-26-18
+
+### Importing sequences
+
+The most basic function of this app is importing a sequence file on FASTA format. The imported file can either be the *template* sequence or the *target* sequence. The target sequence is the DNA sequence of the gene of interest that will be inserted into the template sequence. We can create a basic function to import a DNA sequence with two derived functions, one for each type of input:
+
+```{r read-sequence-fun}
+read_sequence <- function(file, ...) {
+  raw <- as_data_frame(read_file(file))
+  
+  df <-raw %>%
+    separate_rows(value, sep = '\n>') %>%
+    separate(value, into = c('header', 'seq'), sep = '\n', extra = 'merge') %>%
+    mutate(
+      seq = str_replace_all(seq, '\n', ''),
+      header = str_replace(header, '>', ''),
+      length = nchar(seq)
+    )
+}
+
+template <- read_sequence("../data/puc19.fasta")
+target <- read_sequence("../data/GFP sequence.fasta")
+```
+
+## 02-28-18
+
+### Updating `read_sequence` function
+
+An useful functionality of `read_sequence` would be simplifying the sequence header information by allowing the user provide a `header_structure` vector — containing the naming scheme of the sequence header — and `id_field` — the field that will be used as the seq id:
+
+```{r fun-read-sequence-update}
+read_sequence <- function(file, id_field = NULL, separator = NULL) {
+  raw <- as_data_frame(read_file(file))
+  
+  df <- raw %>%
+    separate_rows(value, sep = '\n>') %>%
+    separate(value, into = c('header', 'seq'), sep = '\n', extra = 'merge') %>%
+    mutate(
+      seq = str_replace_all(seq, '\n', ''),
+      header = str_replace(header, '>', ''),
+      length = nchar(seq)
+    )
+  
+  #Checking if optional parameters were passed
+  if(is.null(id_field)) {
+    id_field <- 'id'
+  }
+  if(is.null(separator)) {
+    separator <- '\\|'
+  }
+  
+  #Creating sequence id from seq header
+  df <- df %>%
+    separate(header, into = id_field, extra = 'drop', sep = separator)
+}
+
+template <- read_sequence("../data/puc19.fasta")
+target <- read_sequence("../data/GFP sequence.fasta")
+```
+
+## 03-01-18
+
+### Update `read_sequence` to add `type` tag to sequences
+
+The `read_sequence` function does not differentiate if the sequence object is a template or a target gene object, so I'll update it again to import the DNA sequences and add a tag `template` or `target`:
+
+```{r fun-read-sequence-update-2}
+read_sequence <- function(file, input_type, id_field = NULL, separator = NULL) {
+  raw <- as_data_frame(read_file(file))
+  
+  df <- raw %>%
+    separate_rows(value, sep = '\n>') %>%
+    separate(value, into = c('header', 'seq'), sep = '\n', extra = 'merge') %>%
+    mutate(
+      type = input_type,
+      seq = str_replace_all(seq, '\n', ''),
+      header = str_replace(header, '>', ''),
+      length = nchar(seq)
+    )
+  
+  #Checking if optional parameters were passed
+  if(is.null(id_field)) {
+    id_field <- 'id'
+  }
+  if(is.null(separator)) {
+    separator <- '\\|'
+  }
+  
+  #Creating sequence id from seq header
+  df <- df %>%
+    separate(header, into = id_field, remove = F, extra = 'drop', sep = separator)
+}
+
+template <- read_sequence("../data/puc19.fasta", input_type = 'template')
+target <- read_sequence("../data/GFP sequence.fasta", input_type = 'target')
+```
+
+### Design primers for gene insertion
+
+#### Extract template and target gene sequence overlaps for primer design
+The simplest design case for Lambda PCR is the insertion of the target gene in a defined location in the destination plasmid. The first thing we need to do is write a function that will collect the extract the *n*-length flanking regions to the left and right of the insertion site and store as the template-overlaping tails of the primers. 
+
+As a starting condition, let's extract $n = 15$ bps around the insertion site:
+
+```{r template-overlap-extraction}
+# insertion_coordinate <- 1500
+# ins_flank_length <- 20
+# target_primer_length <- 15
+
+#Functions to extract flanking sequences from insertion site:
+get_overlaps <- function(seq_object, position=NULL, length=NULL) {
+  #Initialize empty overlap object
+  overlaps <- tibble(
+    id = character(),
+    type = character(),
+    origin = character(),
+    seq = character()
+  )
+  
+  #Checking what type of object was passed to function:
+  if(seq_object$type == 'template') {
+    #Using default overlap length of 20 if not provided:
+    overlap_length <- ifelse(is.null(length), 20, length)
+    #Extracting overlaps
+    overlap_left <- substr(seq_object$seq, (position-overlap_length), position)
+    overlap_right <- substr(seq_object$seq, (position+1), (overlap_length+position+1))
+    #Populating overlap object:
+    overlaps <- overlaps %>% 
+      add_row(id = 'left', type = 'overlap', origin = 'template', seq = overlap_left) %>%
+      add_row(id = 'right', type = 'overlap', origin = 'template', seq = overlap_right)
+  } else {
+    #Using default overlap length of 20 if not provided:
+    overlap_length <- ifelse(is.null(length), 15, length)
+    #Extracting overlaps
+    overlap_left <- substr(seq_object$seq, 1, overlap_length)
+    overlap_right <- substr(seq_object$seq, seq_object$length-overlap_length, seq_object$length)
+    #Populating overlap object:
+    overlaps <- overlaps %>% 
+      add_row(id = 'left', type = 'overlap', origin = 'target', seq = overlap_left) %>%
+      add_row(id = 'right', type = 'overlap', origin = 'target', seq = overlap_right)
+  }
+}
+
+overlaps_template <- get_overlaps(template, position = 1500)
+overlaps_target <- get_overlaps(target)
+```
+
+#### Complement and reverse complement functions: 
+
+```{r fun-seq-convertion}
+complement <- function(sequence) {
+  seq <- toupper(sequence)
+  complement <- chartr('ATCG', 'TAGC', seq)
+}
+
+reverse_complement <- function(sequence) {
+  complement <- complement(sequence)
+  revcomp <- stringi::stri_reverse(complement)
+}
+
+```
+
+#### Correct primer orientations
+
+Primer design for LambdaPCR is tricky because there are special rules that need to be followed regarding the primer tails. I had to use colored markers to understand what to do:
+
+```{r primer-design-guide-img}
+knitr::include_graphics("~/Downloads/Lambapcr_primer_rules.jpg")
+knitr::include_graphics("~/Desktop/lambdapcr_overview.png")
+```
+
+So, in order to design the primers for the first PCR of LambdaPCR, we have to use the following rules:
+
+- Forward primer: template left overlap + target left overlap, 5'-3' orientation
+- Reverser primer: complement of target right overlap + complement of template right overlap,  5'-3' orientation
+
+Now that we have the overlaps for both the template and the target sequences, we can create our first LambdaPCR primer pair:
+
+```{r fun-create-primers}
+create_primers <- function(overlaps_target, overlaps_template) {
+  overlaps <- bind_rows(overlaps_target, overlaps_template)
+  
+  primers <- overlaps %>%
+    spread(origin, seq) %>%
+    select(-type) %>%
+    mutate(
+      seq = case_when(
+        id == 'left' ~ paste(tolower(template), 
+                             target, 
+                             sep = ''),
+        id == 'right' ~ paste(tolower(reverse_complement(template)), 
+                              reverse_complement(target), 
+                              sep = ''
+                              )
+      )
+    ) %>%
+    mutate(id = case_when(
+      id == 'left' ~ gsub('left', 'forward', id),
+      id == 'right' ~ gsub('right', 'reverse', id)
+    )) %>%
+    mutate(type = 'primer') %>%
+    select(-target, -template)
+}
+
+primers <- create_primers(overlaps_target, overlaps_template)
+
+```
+
+
+
