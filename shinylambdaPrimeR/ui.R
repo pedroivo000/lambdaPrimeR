@@ -1,33 +1,49 @@
 #
-# This is the user-interface definition of a Shiny web application. You can
-# run the application by clicking 'Run App' above.
-#
-# Find out more about building applications with Shiny here:
-# 
-#    http://shiny.rstudio.com/
+# UI for lambdaPrimeR Shiny app
 #
 
 library(shiny)
 
-# Define UI for application that draws a histogram
-shinyUI(fluidPage(
+# Define UI:
+shinyUI(navbarPage("lambdaPrimeR", fluid = T,
   
-  # Application title
-  titlePanel("Old Faithful Geyser Data"),
-  
-  # Sidebar with a slider input for number of bins 
-  sidebarLayout(
-    sidebarPanel(
-       sliderInput("bins",
-                   "Number of bins:",
-                   min = 1,
-                   max = 50,
-                   value = 30)
-    ),
+
+  # Primer design tab -------------------------------------------------------
+  tabPanel("Design primers",
     
-    # Show a plot of the generated distribution
-    mainPanel(
-       plotOutput("distPlot")
+    # Sidebar with input and output options ----
+    sidebarLayout(
+      
+      # Panel in sidebar with sequence inputs ----
+      sidebarPanel(
+        
+        # Sidebar panel title ----
+        titlePanel("Sequence input"),
+        
+        # Input: input sequence type selection ----
+        selectInput('sequence_type', label = 'Sequence type', 
+                    choices = list('Vector' = 'vector', 'Target' = 'target'),
+                    selected = 'vector'),
+        
+        # Input: Paste sequence ----
+        textAreaInput("input_seq", label = "Paste input sequence below:", 
+                      width = '100%'),
+        
+        # Input: Upload file ----
+        fileInput("input_file", "Or upload FASTA file with sequence:", width = '100%'), 
+        
+        # Input: load sequences button ---- 
+        actionButton('load_seq_button', 'Load sequence')
+      ), 
+    
+      # Main panel displaying outputs ----
+      mainPanel(
+        fluidPage(
+        
+          # Ouput: Input sequence print ----
+          verbatimTextOutput("pasted_seq") 
+        )
+      )
     )
   )
 ))
