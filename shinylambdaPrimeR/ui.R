@@ -17,7 +17,8 @@ shinyUI(navbarPage("lambdaPrimeR", fluid = T,
         # Tabs on sidebar panel ----
         tabsetPanel(
           # Input tab on sidebar ----
-          tabPanel("Sequence input",
+          tabPanel("Input",
+                  
             # Input: input sequence type selection ----
             selectInput('sequence_type', label = 'Sequence type', 
                         choices = list('Vector' = 'vector', 'Target' = 'target'),
@@ -33,7 +34,12 @@ shinyUI(navbarPage("lambdaPrimeR", fluid = T,
         
           # Desing tab on sidebar ----
           tabPanel("Design",
-            titlePanel("Parameters")
+            
+            # Input: insertion coordinate ----
+            numericInput('ins_coord', 'Insertion coordinate', value = ''),
+            
+            # Input: design primers button ----
+            actionButton('design_primers_button', 'Design primers')
           )
         )
       ), 

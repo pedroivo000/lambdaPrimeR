@@ -48,6 +48,26 @@ read_sequences <- function(file, input_type, id_field = NULL, separator = NULL) 
     separate(header, into = id_field, remove = F, extra = 'drop', sep = separator)
 }
 
+
+#' Append sequence input to global input dataframe
+#' 
+#' Internal use in the Shiny UI only.
+#'
+#' @param input 
+#' @param global_value 
+#'
+#' @return
+#' @export
+#'
+#' @examples
+collect_input_shiny <- function(input, global_value) {
+  new_input <- input
+  global_value <- rbind(global_value, new_input)
+}
+
+#03/03/18, Wife's comment here:
+#love you
+
 get_overlaps <- function(seq_object, position=NULL, length=NULL) {
   #Initialize empty overlap object
   overlaps <- tibble(
