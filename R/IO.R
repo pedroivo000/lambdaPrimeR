@@ -3,26 +3,31 @@
 #############
 
 
-#' Read sequences from file.
+#'Read sequences from file.
 #'
-#'\code{read_sequences} reads a FASTA file into a dataframe, one sequence per row.
-#'This function also adds a \code{type} tag to each sequence, indicating if they
-#'are either a \code{target} gene or a \code{template} sequence. User can optionally 
-#'select what part of the sequence header will be used as internal id. 
+#'\code{read_sequences} reads a FASTA file into a dataframe, one sequence per
+#'row. This function also adds a \code{type} tag to each sequence, indicating if
+#'they are either a \code{target} gene or a \code{template} sequence. User can
+#'optionally select what part of the sequence header will be used as internal
+#'id.
 #'
-#' @param file A path to a FASTA file or a vector containing the file path.
-#' @param input_type A string used to indicate if the sequence is a 'target' 
-#'   or a 'template'.
-#' @param id_field A string with the name of the id field. Defaults to 'id'.
-#' @param separator A single character used to separate fields in the sequence
+#'@param file A path to a FASTA file, a vector containing the file path or a
+#'  string containing the sequence with header.
+#'@param input_type A string used to indicate if the sequence is a 'target' or a
+#'  'template'.
+#'@param input_df A dataframe containing an already imported sequence input. New
+#'  inputs will be appended to this object.
+#'@param id_field A string with the name of the id field. Defaults to 'id'.
+#'@param separator A single character used to separate fields in the sequence
 #'  headers. Defaults to '\\|'.
 #'
-#' @return A dataframe. 
+#'@return A dataframe.
 #'
 #' @examples
 #' read_sequences("data/test.fasta", input_type = 'target')
 #' read_sequences("data/test.fasta", id_field = 'name', separator = '-')
-read_sequences <- function(file, input_type, id_field = NULL, separator = NULL) {
+read_sequences <- function(sequence_input, input_type, input_df=NULL,
+                           id_field = NULL, separator = NULL) {
   raw <- as_data_frame(read_file(file))
   
   df <- raw %>%
@@ -46,6 +51,13 @@ read_sequences <- function(file, input_type, id_field = NULL, separator = NULL) 
   #Creating sequence id from seq header
   df <- df %>%
     separate(header, into = id_field, remove = F, extra = 'drop', sep = separator)
+  
+  #Appending new input to input dataframe if input_df object was provided:
+  if(!is.null(input_df)) {
+    input_df <- bind_rows(input_df, df)
+  } else {
+    df
+  }
 }
 
 
