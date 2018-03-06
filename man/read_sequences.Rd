@@ -4,27 +4,33 @@
 \alias{read_sequences}
 \title{Read sequences from file.}
 \usage{
-read_sequences(file, input_type, id_field = NULL, separator = NULL)
+read_sequences(sequence_input, input_type, input_df = NULL, id_field = NULL,
+  separator = NULL)
 }
 \arguments{
-\item{file}{A path to a FASTA file or a vector containing the file path.}
+\item{input_type}{A string used to indicate if the sequence is a 'target' or a
+'template'.}
 
-\item{input_type}{A string used to indicate if the sequence is a 'target' 
-or a 'template'.}
+\item{input_df}{A dataframe containing an already imported sequence input. New
+inputs will be appended to this object.}
 
 \item{id_field}{A string with the name of the id field. Defaults to 'id'.}
 
 \item{separator}{A single character used to separate fields in the sequence
 headers. Defaults to '\\|'.}
+
+\item{file}{A path to a FASTA file, a vector containing the file path or a
+string containing the sequence with header.}
 }
 \value{
 A dataframe.
 }
 \description{
-\code{read_sequences} reads a FASTA file into a dataframe, one sequence per row.
-This function also adds a \code{type} tag to each sequence, indicating if they
-are either a \code{target} gene or a \code{template} sequence. User can optionally 
-select what part of the sequence header will be used as internal id.
+\code{read_sequences} reads a FASTA file into a dataframe, one sequence per
+row. This function also adds a \code{type} tag to each sequence, indicating if
+they are either a \code{target} gene or a \code{template} sequence. User can
+optionally select what part of the sequence header will be used as internal
+id.
 }
 \examples{
 read_sequences("data/test.fasta", input_type = 'target')

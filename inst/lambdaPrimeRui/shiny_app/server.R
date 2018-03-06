@@ -1,9 +1,9 @@
 #
 # Server logic of the lambdaPrimeR Shiny app
 #
-
-library(shiny)
-library(lambdaPrimeR)
+# 
+# library(shiny)
+# library(lambdaPrimeR)
 
 # Define server logic required to draw a histogram
 shinyServer(function(input, output) {
@@ -11,7 +11,7 @@ shinyServer(function(input, output) {
   # Global variables ----
   globals <- reactiveValues(
     # Dataframe with sequence inputs
-    sequence_inputs = data_frame()
+    sequence_inputs = tibble::tibble()
   )
   
   # Reactive object: input sequence ---- 
