@@ -9,7 +9,7 @@ output: html_notebook
 
 ## Packages and global options
 
-```{r packages}
+```{r packages, message=FALSE, warning=FALSE}
 library(tidyverse)
 # library(Biostrings)
 library(devtools)
@@ -75,6 +75,8 @@ read_sequence <- function(file, id_field = NULL, separator = NULL) {
 template <- read_sequence("../data/puc19.fasta")
 target <- read_sequence("../data/GFP sequence.fasta")
 ```
+
+# March
 
 ## 03-01-18
 
@@ -221,8 +223,170 @@ create_primers <- function(overlaps_target, overlaps_template) {
 }
 
 primers <- create_primers(overlaps_target, overlaps_template)
+```
+
+## 03/08/18
+
+### `lambdaPrimer` flowchart
+
+```{r diagrammer-test}
+library(DiagrammeR)
+
+grViz("
+  digraph lambdaPrimeR_dataflow {
+    rankdir='LR';
+    # splines='ortho';
+    #internal object nodes:
+    node [shape = circle]
+    input; overlaps; primers; score
+    
+    #Input and output nodes 
+    node [shape = box]
+    target; template; ins_position; report
+
+    #Function nodes:
+    node [shape = plaintext]
+    read_sequences; get_overlaps; create_primer; melt_temp;
+    hairpin_prob; primer_score; rank_primers; mutate_primer;
+    report_best_primers
+    
+    #Edges:
+    target -> read_sequences; template -> read_sequences; 
+    read_sequences -> input; input -> get_overlaps;
+    ins_position -> get_overlaps; get_overlaps -> overlaps; 
+    overlaps -> create_primer; create_primer -> primers;
+    primers -> report_best_primers; report_best_primers -> report
+    
+    subgraph cluster_ga {
+      primers -> melt_temp; primers -> hairpin_prob;
+      hairpin_prob -> primer_score; melt_temp -> primer_score;
+      primer_score -> score; score -> rank_primers; 
+      rank_primers -> mutate_primer; mutate_primer -> primers;
+      label = 'Genetic algorithm'
+    }
+    
+  }
+")
 
 ```
 
+## 03/09/2018
+
+### Melting temperature calculation with MELTING tool
+
+Today I am learning how to use the [MELTING](https://www.ebi.ac.uk/biomodels/tools/melting/) tool to calculate the melting temperature of primers. Accoring to the documenation, the following options are mandatory:
+
+```
+Mandatory options :
+
+-S [sequence]
+	Nucleic acid sequence, mandatory. The sens of this sequence must be 5'-3'.
+
+
+-C [complementary sequence]
+	Nucleic acid complementary sequence, mandatory only if there is inosine bases 
+	or azobenznes in the sequence entered with the opton -S. The sens of this 
+	sequence must be 3'-5''.
+
+-E [agent1=concentration1:agent2=concentration2]
+	Different agent concentrations in the solution. The agents can be cations 
+	(Na, K, Tris, Mg for Na+, K+, Tris+ and Mg2+), dNTP or other agents 
+	(DMSO, formamide). The concentrations must be in Mol/L but there are some 
+	exceptions : DMSO is a percentage, formamide is a percentage if the method 
+	lincorr is chosen and in Mol/L if the method bla96 is chosen. At least one 
+	cation concentration is mandatory, the other agents are optional. See the 
+	documentation for the concentration limits. It depends on the used correction.
+
+-P [nucleotide concentration]
+	Concentration in mol/L of the nucleic acid strand in excess, mandatory.
+
+-H [hybridization]
+	Type of hybridization, mandatory. Four types of hybridization are allowed: 
+	dnadna (DNA duplex), rnarna (RNA duplex), dnarna or rnadna (hybrid DNA/RNA) 
+	and mrnarna or rnamrna (2-o-methyl RNA/ RNA). The type of hybridization 
+	defines the kind of the sequence and its complementary. 
+		Ex : dnarna = the sequence (entered with the option -S) is a DNA sequence 
+		and its complementary (entered with the option -C) is a RNA sequence.
+		Ex : rnadna = the sequence (entered with the option -S) is a RNA sequence 
+		and its complementary (entered with the option -C) is a DNA sequence  
+```
+
+We can use the following command to calculate the melting temperature of a
+DNA-DNA hybridization:
+
+```{bash}
+/Users/pedro_work/MELTING5.1.1/executable/melting -S ATGGTGAGCAAGGGC -H dnadna 
+-P 1e-7 -E Mg=1
+```
+
+
+### Integrating MELTING and R
+
+To test the MELTING tool, I am going to use the `lambdaPrimeR` test primer 
+sequences. The test primers are designed using the GFP gene sequence as target
+and the pUC19 plasmid sequence as template. The insertion coordinate is 1500. 
+
+```{r create-test-primers}
+#Input sequences:
+target <- system.file('extdata', 'GFP sequence.fasta', package = 'lambdaPrimeR')
+template <- system.file('extdata', 'puc19.fasta', package = 'lambdaPrimeR')
+inputs <- read_sequences(target, input_type = 'target')
+inputs <- read_sequences(template, input_df = inputs, input_type = 'template')
+
+#get sequence overlaps:
+overlaps <- get_overlaps(inputs, 1500)
+primers <- create_primer_pair(overlaps)
+```
+
+```{r pimers-object}
+primers
+```
+
+Let's use the forward primer to test if we can use R to call MELTING to calculate
+the melting temperature fr the annealing reagions of the primer, and return the
+value back to R. The idea for this function came from [here](https://darrenjw.wordpress.com/2011/01/01/calling-java-code-from-r/).
+
+```{r fun-melt-temperature}
+primer <- toupper(primers$seq[primers$id == 'forward'])
+melt_temperature <- function(sequence, template_conc, ion_conc) {
+  melting_path <- "/Users/pedro_work/MELTING5.1.1/executable/melting"
+  melting_command <- paste(melting_path, '-S', sequence, '-H dnadna', '-P',
+                           template_conc, '-E', ion_conc)
+  system(melting_command, intern = T)
+}
+
+melt_temp_test <- melt_temperature(primer, 1e-07, 'Mg=1')
+```
+
+```{r melt-temp-output}
+melt_temp_test
+```
+
+## 03/10/18
+
+### Updating `melt_temperature` function to parse `melting` command output
+
+```{r fun-melt-temperature-update}
+melt_temperature <- function(sequence, template_conc, ion_conc) {
+  melting_path <- "/Users/pedro_work/MELTING5.1.1/executable/melting"
+  melting_command <- paste(melting_path, '-S', sequence, '-H dnadna', '-P',
+                           template_conc, '-E', ion_conc)
+  out <- system(melting_command, intern = T)
+  
+  #Creting melting temperature dataframe:
+  melt_temp <- tibble(raw = out[5]) %>%
+    mutate(
+      primer = sequence,
+      tm = as.numeric(str_extract(raw, '\\d+\\.\\d+'))
+    ) %>%
+    select(-raw)
+}
+
+melt_temp <- melt_temperature(primer, template_conc = 1e-7, ion_conc = 'Mg=1')
+```
+
+```{r melt-temp-output-update}
+melt_temp
+```
 
 
