@@ -11,9 +11,11 @@ output: html_notebook
 
 ```{r packages, message=FALSE, warning=FALSE}
 library(tidyverse)
-# library(Biostrings)
-library(devtools)
 library(stringr)
+library(ggforce)
+library(cowplot)
+library(RcppRoll)
+source("~/proposal_prelimn/code/libraries_and_global_opts.R")
 ```
 
 ## 02-26-18
@@ -389,4 +391,319 @@ melt_temp <- melt_temperature(primer, template_conc = 1e-7, ion_conc = 'Mg=1')
 melt_temp
 ```
 
+## 03/14/18
+
+### Using NUPACK to calculate hairpin formation probability
+
+Today I am learning how to use NUPACK to calculate the probability of hairpin
+formation on the template-overlaping regions of the $\lambda$-PCR primers. The
+reason for this is that the formation of hairpins in the annealing regions of
+the mega-primer could cause the DNA polymerase to dettach from the DNA template,
+and NUPACk is capable of calculating the probability of a base being bound and
+unbound to any other base in the sequence.
+
+In order to test NUPACK, I'll use the sequence of the GFP gene with the 
+template-overlap flanking regions as the test input.
+
+```{r nupack_test_input, warning=FALSE, message=FALSE}
+test_file <- system.file("extdata", "nupack_test_seq.in",
+                          package = "lambdaPrimeR")
+
+test_seq <- read_file(test_file)
+
+test_seq
+nchar(test_seq)
+```
+
+The command to run NUPACK to calculate the pair formation probability of the
+input sequence is:
+
+```{bash nupack-command, eval=FALSE}
+cd /Users/pedro_work/lambdaPrimeR/inst/extdata
+time pairs -T 45 -material dna nupack_test_seq
+```
+```
+real	2m2.072s
+user	2m0.107s
+sys	0m1.582s
+```
+This command produced an output called `nupack_test_seq.ppairs`, that contains
+the calculation of the base pair formation probabilities:
+
+```{r nupack-output}
+nupack_output <- read_lines("../extdata/nupack_test_seq.ppairs")
+head(nupack_output, 25)
+```
+
+According to the NUPACK manual, the `nupack_test_seq.ppairs` contains the 
+probability of formation of each base pair in the secondary structure of the 
+input sequence: 
+
+```{r pairs-command-man-page, echo=FALSE}
+knitr::include_graphics(path = "./nupack_pairs_command_manual_page.pdf")
+```
+
+We can extract the probabilities that a base will be unpaired from
+`nupack_test_seq.ppairs` and store it in a dataframe:
+
+```{r base-pair-probabilities}
+unpaired_probabilities <- tibble(lines = nupack_output) %>%
+  filter(grepl('^\\d+\\t', lines)) %>%
+  separate(lines, into = c('ibase', 'jbase', 'p'), sep = '\t') %>%
+  mutate_all(as.numeric) %>%
+  filter(jbase == nchar(test_seq)+1)
+  
+unpaired_probabilities
+```
+
+The `p` column contains the probabilities of a base to be unbound at the
+the specified melting temperature (T~m~ = 45 ºC). We can use this column to plot
+the variation in probability throughout the target gene sequence:
+
+```{r prob-plot-target-gene}
+#Full sequenc
+zoom_left <- ggplot(unpaired_probabilities, 
+                    aes(x=ibase, y=p, color = ibase >= 40))+
+  geom_line(size = 0.5)+
+  geom_point(size = 1) + 
+  xlab('Base i')+
+  ylab('Prob. that base i is unpaired')+
+  theme_bw()+
+  facet_zoom(x = ibase <= 40, zoom.size = 1.5)+
+  scale_color_manual(values = greenfocus)+
+
+  theme(legend.position = "none")
+
+zoom_right <- ggplot(unpaired_probabilities, 
+                    aes(x=ibase, y=p, color = ibase <= nchar(test_seq) - 40))+
+  geom_line(size = 0.5)+
+  geom_point(size = 1) + 
+  xlab('Base i')+
+  ylab('Prob. that base i is unpaired')+
+  facet_zoom(x = ibase >= nchar(test_seq)-40, zoom.size = 1.5)+
+  theme_bw()+
+  scale_color_manual(values = greenfocus)+
+  theme(legend.position = "none")
+
+plot <- plot_grid(zoom_left, zoom_right, ncol = 2,  labels = 'auto')
+plot
+```
+
+We can see that the unpairing probability varies a lot from base to base
+throughout the sequence. We can calculate local probilities of a k-mer of length
+$l$ to have a better idea of how the probability changes with position:
+
+```{r unpaired-prob-kmer}
+window_size <- c(2, 4, 20, 50, 100, nchar(test_seq))
+
+kmer_probabilities <- tibble(l = window_size) %>%
+  group_by(l) %>%
+  do(
+    cummprod = roll_prodl(unpaired_probabilities$p, n = .)
+  ) %>%
+  unnest() 
+```
+
+## 03/15/18
+
+### Testing NUPACK with mega-primer fragments
+
+Let's check how the base-pairing probabilities calculated by NUPACK will change 
+if we use only the edges of the mega-primer sequence. The default overlap 
+lengths in the `lambdaPrimeR`-generated primes are 20bp template overlaps and 
+15 bp target gene overlap. So, for this first test, we'll use only the firts 
+40bp of each end of mega-primer sequence:
+
+```{r megaprimer-seq-edges-extract}
+#extracting edges:
+fiveprime_end_seq <- substr(test_seq, 1, 40)
+threeprime_end_seq <- substr(test_seq, (nchar(test_seq)-40), nchar(test_seq))
+
+#Writing NUPACK input files
+write_file(fiveprime_end_seq, 'notebook_data/gfp_puc19_frag_5p.in')
+write_file(threeprime_end_seq, 'notebook_data/gfp_puc19_frag_3p.in')
+```
+
+We can write a function that will pass the input files to NUPACK and retrieve
+the output:
+```{r run-nupack-function}
+run_nupack <- function(input_file, melting_temperature, paired=TRUE) {
+  #Extracting file prefix:
+  file_prefix <- gsub('.in$', '', input_file)
+  output_file_name <- gsub('.in$', '.ppairs', input_file)
+  
+  #Input sequence length:
+  input_seq <- read_file(input_file)
+  
+  #Running NUPACK with the input file
+  nupack_command <- paste('time', 'pairs', '-T', melting_temperature,
+                          '-material dna', file_prefix)
+  system(nupack_command, intern = T)
+  
+  #Import output file and extract base pair probabilities:
+  nupack_output <- read_lines(output_file_name)
+  # print(head(nupack_output, 20))
+  
+  unpaired_probabilities <- tibble(lines = nupack_output) %>%
+    filter(grepl('^\\d+\\t', lines)) %>%
+    separate(lines, into = c('ibase', 'jbase', 'p'), sep = '\t') %>%
+    mutate_all(as.numeric) 
+  
+  if(paired) {
+    unpaired_probabilities %>%
+      filter(jbase < nchar(input_seq)+1)
+  } else {
+    unpaired_probabilities %>%
+      filter(jbase == nchar(input_seq)+1)
+  }
+    
+}
+```
+
+```{r run-nupack-seq-fragments-test}
+seq_fragments <- dir(path = '~/lambdaPrimeR/inst/development/notebook_data/', 
+                     pattern = '*.in', full.names = T)
+
+nupack_outputs <- tibble(input = seq_fragments) %>%
+  group_by(input) %>%
+  do(
+    nupack_output = run_nupack(.$input, 45, paired = F)
+  ) %>%
+  unnest() %>%
+  mutate(input = basename(input))
+```
+
+NUPACK runs much faster on smaller sequences (duh). We need to check if the base
+pair formation probability changed now that we used only the edges of the mega
+primer:
+
+```{r base-pair-prob-edges}
+unpaired_probabilities <- unpaired_probabilities %>%
+  mutate(input = case_when(
+    ibase <= 40 ~ 'gfp_puc19_full_5p',
+    ibase >= (nchar(test_seq) - 40) ~ 'gfp_puc19_full_3p',
+    TRUE ~ NA_character_
+  )) %>%
+  filter(!is.na(input)) %>%
+  group_by(input) %>%
+  mutate(ibase = row_number())
+
+
+edge_vs_full_seq_prob <- bind_rows(nupack_outputs, unpaired_probabilities) %>%
+  mutate(input = gsub('.in', '', input)) %>%
+  separate(input, into = c('target', 'template', 'input_type', 'end'), sep = '_')
+
+plot <- ggplot(edge_vs_full_seq_prob, aes(x = ibase, y = p, color = input_type))
+plot+
+  facet_grid( ~ end, scales = 'free_x')+
+  geom_line()+
+  geom_point()+
+  xlab('Base i')+
+  ylab('Prob. of base i being unpaired')+
+  scale_color_manual(values = plot_pallets$tol2qualitative, name = "Input type",
+                     labels = c('Sequence edges', 'Full sequence'))
+  
+```
+
+It looks like **there are very changes on the base pair probabilities calculated 
+by NUPACK when just the edges of the mega primer are used as input**. This is a 
+very good result as it means that I don't need to use the mega primer entire 
+sequence for this step, reducing the running time significantly. 
+
+## 03/16/18
+
+### Continuing testing NUPACK with mega-primer fragments
+
+My hypothesis is that using just the mega primer edges improves the probability
+of a base to be unpaired because NUPACK cannot calculate the probability of two 
+distant bases pairing. We can check if this is the case by ploting the base pair
+coordinates and see if the NUPACK runs with just the edges does not contain
+pairs formed by two distant bases.
+
+```{r base-pair-coordinates-data, warning=FALSE, message=FALSE}
+full_seq_paired_bases <- tibble(lines = nupack_output) %>%
+  filter(grepl('^\\d+\\t', lines)) %>%
+  separate(lines, into = c('ibase', 'jbase', 'p'), sep = '\t') %>%
+  mutate_all(as.numeric) %>%
+  filter(jbase < nchar(test_seq)+1) %>%
+  mutate(input = case_when(
+    ibase <= 40 ~ 'gfp_puc19_full_5p',
+    ibase >= (nchar(test_seq) - 40) ~ 'gfp_puc19_full_3p',
+    TRUE ~ NA_character_
+  )) %>%
+  filter(!is.na(input))
+  
+
+fragments_paired_prob <- tibble(input = seq_fragments) %>%
+  group_by(input) %>%
+  do(
+    nupack_output = run_nupack(.$input, 45, paired = T)
+  ) %>%
+  unnest() %>%
+  mutate(
+    input = basename(input),
+    ibase = ifelse(input == 'gfp_puc19_frag_3p.in', 
+                   ibase + nchar(test_seq) - 41,
+                   ibase),
+    jbase = ifelse(input == 'gfp_puc19_frag_3p.in', 
+                   jbase + nchar(test_seq) - 41,
+                   jbase)
+  )
+
+edge_vs_full_base_pair_prob <- 
+  bind_rows(fragments_paired_prob, full_seq_paired_bases) %>%
+  mutate(input = gsub('.in', '', input)) %>%
+  separate(input, into = c('target', 'template', 'input_type', 'end'), sep = '_')
+```
+
+```{r base-pair-energy-plot, echo=FALSE}
+prob_plots <- edge_vs_full_base_pair_prob %>%
+  group_by(input_type) %>%
+  do(
+    plots = 
+      ggplot(., aes(x=ibase, y=jbase, color = p)) +
+      facet_wrap(~ input_type, scales = 'free') +
+      geom_point()+
+      facet_zoom(x=ibase<100)+
+      scale_color_gradientn(colors = rev(RColorBrewer::brewer.pal(11, "Spectral")))
+  )
+  
+plot_grid(plotlist = prob_plots$plots, ncol = 2, labels = 'auto')
+```
+
+```{r base-pair-prob-plot, echo=FALSE}
+prob_plots <- edge_vs_full_base_pair_prob %>%
+  group_by(end) %>%
+  do(
+    plots = 
+      ggplot(., aes(x=ibase, y=jbase, color = p, z=p))+
+      facet_grid( ~ input_type, scales = 'free')+
+      geom_point()+
+      # stat_summary_hex(bins = 50)+
+      scale_color_gradientn(colors = rev(RColorBrewer::brewer.pal(11, "Spectral")))
+  )
+  
+plot_grid(plotlist = prob_plots$plots, nrow = 2, labels = 'auto')
+
+  
+
+```
+
+We can see that most of the changes in the base pairing probability occurs at 
+the 5' end of the mega-primer sequence. By using only the first 40 bp of the
+left end, we don't take into consideration the probability of these bases to 
+bind to distant bases (200-400 bp distant), increasing our unpaired probability.
+
+### Function to break the mega-primer sequence into smaller fragments
+
+```{r seq-fragmentor}
+split_sequence <- function(input_sequence, fragment_length) {
+  string <- toupper(input_sequence)
+  pattern <- paste('(?<=.{', fragment_length, '})', sep = '')
+  fragments <- strsplit(input_sequence, pattern, perl=T)
+} 
+
+test <- split_sequence(test_seq, 5)
+test
+```
 

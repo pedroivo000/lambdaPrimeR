@@ -18,6 +18,7 @@
 #' @return A dataframe containing the overlap sequence and orientation for each
 #' input type. 
 #' 
+#' @export
 #' @keywords internal
 #'
 get_overlaps <- function(sequence_inputs, position=NULL, length=NULL) {
@@ -83,7 +84,9 @@ get_overlaps <- function(sequence_inputs, position=NULL, length=NULL) {
 #' @param overlaps A dataframe containing the overlap information for both input
 #' types. The \code{overlaps} object is created by \code{get_overlaps}.
 #'
+#' 
 #' @return A dataframe containing the forward and reverse primer sequences.
+#' @export
 create_primer_pair <- function(overlaps) {
   primers <- overlaps %>%
     #Add columns with overlap seqs:
@@ -102,14 +105,19 @@ create_primer_pair <- function(overlaps) {
         )
       )
     ) %>%
+    #changing id to primer orientation
     mutate(id = case_when(
       id == 'left' ~ gsub('left', 'forward', id),
       id == 'right' ~ gsub('right', 'reverse', id)
     )) %>%
     mutate(type = 'primer') %>%
+    #extracting template and target annealing sequences
+    mutate(temp = str_replace(seq, '([[:upper:]])', ',\\1')) %>%
+    separate(temp, into = c('template_annealing_seq', 'target_annealin_seq'),
+             sep = ',') %>%
     select(-target, -template)
+    
 }
-
 
 #' Calculate primer melting temperature. 
 #'

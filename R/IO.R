@@ -22,6 +22,7 @@
 #'  headers. Defaults to '\\|'.
 #'
 #'@return A dataframe.
+#'@export
 #'
 #' @examples
 #' read_sequences("data/test.fasta", input_type = 'target')
