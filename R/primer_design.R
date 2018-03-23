@@ -118,33 +118,3 @@ create_primer_pair <- function(overlaps) {
     select(-target, -template)
     
 }
-
-#' Calculate primer melting temperature. 
-#'
-#' @param sequence A string corresponding to the primer sequence.
-#' @param template_conc A numeric value corresponding to the DNA template 
-#' concentration. Defauts to $10^-4$ M. 
-#' @param ion_conc A string corresponding to the concentration of ion. See 
-#' MELTING documentation for details. 
-#'
-#' @return A dataframe containing the primer sequence and the calculated melting
-#' temperature \code{tm}.
-#' @export
-#'
-#' @examples
-melt_temperature <- function(sequence, template_conc, ion_conc) {
-  melting_path <- "/Users/pedro_work/MELTING5.1.1/executable/melting"
-  melting_command <- paste(melting_path, '-S', sequence, '-H dnadna', '-P',
-                           template_conc, '-E', ion_conc)
-  out <- system(melting_command, intern = T)
-  
-  #Creting melting temperature dataframe:
-  melt_temp <- tibble(raw = out[5]) %>%
-    mutate(
-      primer = sequence,
-      tm = as.numeric(str_extract(raw, '\\d+\\.\\d+'))
-    ) %>%
-    select(-raw)
-  
-  melt_temp
-}

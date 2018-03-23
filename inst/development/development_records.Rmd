@@ -5,9 +5,7 @@ description: LambdaPCR development archiving notebook
 output: html_notebook
 ---
 
-# February 
-
-## Packages and global options
+# Packages and global options
 
 ```{r packages, message=FALSE, warning=FALSE}
 library(tidyverse)
@@ -16,7 +14,10 @@ library(ggforce)
 library(cowplot)
 library(RcppRoll)
 source("~/proposal_prelimn/code/libraries_and_global_opts.R")
+devtools::load_all(pkg = "~/lambdaPrimeR/")
 ```
+
+# February 
 
 ## 02-26-18
 
@@ -489,21 +490,6 @@ plot <- plot_grid(zoom_left, zoom_right, ncol = 2,  labels = 'auto')
 plot
 ```
 
-We can see that the unpairing probability varies a lot from base to base
-throughout the sequence. We can calculate local probilities of a k-mer of length
-$l$ to have a better idea of how the probability changes with position:
-
-```{r unpaired-prob-kmer}
-window_size <- c(2, 4, 20, 50, 100, nchar(test_seq))
-
-kmer_probabilities <- tibble(l = window_size) %>%
-  group_by(l) %>%
-  do(
-    cummprod = roll_prodl(unpaired_probabilities$p, n = .)
-  ) %>%
-  unnest() 
-```
-
 ## 03/15/18
 
 ### Testing NUPACK with mega-primer fragments
@@ -612,6 +598,19 @@ sequence for this step, reducing the running time significantly.
 
 ## 03/16/18
 
+### Function to break the mega-primer sequence into smaller fragments
+
+```{r seq-fragmentor}
+split_sequence <- function(input_sequence, fragment_length) {
+  string <- toupper(input_sequence)
+  pattern <- paste('(?<=.{', fragment_length, '})', sep = '')
+  fragments <- strsplit(input_sequence, pattern, perl=T)
+} 
+
+test <- split_sequence(test_seq, 5)
+test
+```
+
 ### Continuing testing NUPACK with mega-primer fragments
 
 My hypothesis is that using just the mega primer edges improves the probability
@@ -679,7 +678,6 @@ prob_plots <- edge_vs_full_base_pair_prob %>%
       ggplot(., aes(x=ibase, y=jbase, color = p, z=p))+
       facet_grid( ~ input_type, scales = 'free')+
       geom_point()+
-      # stat_summary_hex(bins = 50)+
       scale_color_gradientn(colors = rev(RColorBrewer::brewer.pal(11, "Spectral")))
   )
   
@@ -694,16 +692,223 @@ the 5' end of the mega-primer sequence. By using only the first 40 bp of the
 left end, we don't take into consideration the probability of these bases to 
 bind to distant bases (200-400 bp distant), increasing our unpaired probability.
 
-### Function to break the mega-primer sequence into smaller fragments
+### Calculating average hairpin formation probability of mega-primer edges
 
-```{r seq-fragmentor}
-split_sequence <- function(input_sequence, fragment_length) {
-  string <- toupper(input_sequence)
-  pattern <- paste('(?<=.{', fragment_length, '})', sep = '')
-  fragments <- strsplit(input_sequence, pattern, perl=T)
-} 
+I need to find a way to calculate the average hairpin formation probability of 
+the mega-primer edges and use that value as part of the primer score that will
+be used to rank the primers designed during the genetic algorith score. 
 
-test <- split_sequence(test_seq, 5)
-test
+One of the ideas I had is to calculate the average hairpin formation of the 
+entire edge. We can write a function to calculate the average probability
+in a rolling window, but we need to keep track of the index of the first base
+of the rolling window current's position. Let's start with a toy dataset to 
+figure out how to do it:
+
+```{r rolling-windon-test}
+df <- tibble(x = 1:10)
+df %>%
+  mutate(
+    right_align = roll_sumr(x, 2),
+    left_align = roll_suml(x, 2)
+  )
+
 ```
+
+Depending on the alignment of the rolling sum window, the base at the end of 
+the window will be different:
+
+- Left-aligned: window starts at base $i$ and ends at base $i + l_{window} -1$
+- Right-aligned: window starts at base $i + l_{window} -1$, ends at base $i$
+
+
+We can write the rolling function using this information:
+```{r rolling-prob-avg-fun}
+window_size <- c(2, 3, 4, 5, 10, 20, 30)
+
+window_probabilities <- tibble(l = window_size) %>%
+  group_by(l) %>%
+  do(
+    cummprod = roll_prodr(unpaired_probabilities$p, n = .),
+    index = unpaired_probabilities$ibase,
+    input = unpaired_probabilities$input,
+    ibase = unpaired_probabilities$ibase
+  ) %>%
+  unnest()
+```
+
+## 03/17/18
+
+### Calculating MFE of primer edges
+
+During the meeting I had with Imen on 03/16/18, she suggested that I calculate 
+the probability of the primer binding the template and see if it is higher than 
+the probability of the primers binding to each other or higher than the 
+probability of hairpin formation. We can use NUPACk to calculate everything,
+
+The fist one I am going to calculate is the minimum free energy secondary 
+structure (MFE). The MFE is the secondary structure with the lowest free 
+energy possible predicted by NUPACK. We can use this free energy value to 
+estimate how stable the predicted primer secondary structure is and calculate
+the hairpin melting temperature. 
+
+#### Updating `run_nupack` function:
+
+Add a `exec` option to specify what NUPACK tool to run. Most NUPACK tools have
+the same parameters:
+
+```
+pfunc [-T temperature] [-multi] [-pseudo] [-material parameters] [-dangles treatment] prefix
+
+pairs [-T temperature] [-multi] [-pseudo] [-material parameters] [-dangles treatment] [-cutoff cutoffvalue] prefix
+
+mfe   [-T temperature] [-multi] [-pseudo] [-material parameters] [-dangles treatment] [-degenerate] prefix
+
+```
+```{r run-nupack-function-update}
+run_nupack <- function(input_file, melting_temperature, exec, timed=FALSE, 
+                       multi=FALSE, paired=TRUE) {
+  #What NUPACK executable to run?
+  nupack_exec <- exec
+  
+  #Extracting file prefix:
+  file_prefix <- gsub('.in$', '', input_file)
+  
+  #Input sequence length:
+  input_seq <- read_file(input_file)
+  
+  #Running NUPACK with the input file
+  if(multi) {
+    nupack_command <- paste(nupack_exec, '-T', melting_temperature,
+                          '-material dna', '-multi', file_prefix)
+  } else {
+    nupack_command <- paste(nupack_exec, '-T', melting_temperature,
+                          '-material dna', file_prefix)
+  }
+  
+  #Importing correct output file for selected NUPACK executable:
+  if(nupack_exec == 'pairs') {
+    system(nupack_command, intern = T)
+    #Import output file 
+    output_file <- gsub('.in$', '.ppairs', input_file)
+    nupack_output <- read_lines(output_file)
+    
+    #extract base pair probabilities:
+    pair_probabilities <- tibble(lines = nupack_output) %>%
+      filter(grepl('^\\d+\\t', lines)) %>%
+      separate(lines, into = c('ibase', 'jbase', 'p'), sep = '\t') %>%
+      mutate_all(as.numeric) 
+    
+    if(paired) {
+      pair_probabilities %>%
+        filter(jbase < nchar(input_seq)+1)
+    } else {
+      pair_probabilities %>%
+        filter(jbase == nchar(input_seq)+1)
+    }
+  } else if (nupack_exec == 'mfe') {
+    system(nupack_command, intern = T)
+    #Import output file 
+    output_file <- gsub('.in$', '.mfe', input_file)
+    nupack_output <- read_lines(output_file)
+    
+    #extract MFE value:
+    mfe <- tibble(
+      input = file_prefix,
+      seq = input_seq,
+      mfe = nupack_output[15],
+      structure = nupack_output[16]
+    )
+  } else if (nupack_exec == 'pfunc') {
+    nupack_output <- system(nupack_command, intern = T)
+    
+    #extract dG and partion function:
+    pfunc <- tibble(
+      dG = nupack_output[14],
+      partition_func = nupack_output[15]
+    )
+  }
+}
+```
+
+```{r run-nupack-fun-update-test}
+mfe <- run_nupack("notebook_data/gfp_puc19_frag_5p.in", 45, exec = 'mfe')
+pfunc <- run_nupack("notebook_data/nupack_pfunc_test.in", 
+                    melting_temperature = 45, 
+                    exec = 'pfunc',
+                    multi = T)
+
+mfe
+pfunc
+```
+
+
+
+
+
+
+## 03/22/18
+
+### `-multi` option of `nupack` functions 
+
+```{r understanding-string-vectors}
+string1 <- 'this is  a string'
+string2 <- 'this is another string'
+vector_of_strings <- c('string1', 'string2')
+vector_of_string_variables <- c(string1, string2)
+
+str(string)
+str(vector_of_strings)
+str(vector_of_string_variables)
+typeof(string)
+typeof(vector_of_strings)
+typeof(vector_of_string_variables)
+length(string1)
+length(vector_of_strings)
+length(vector_of_string_variables)
+
+lapply(vector_of_string_variables, print)
+```
+
+```{r test-multiple-seq-input}
+input_seqs_test <- c(threeprime_end_seq, fiveprime_end_seq)
+
+parse_inputs <- function(string_vector) {
+  #Checking length of input vector:
+  if(length(string_vector) == 1) {
+    assembled_string <- string_vector
+    # print(assembled_string)
+  } else {
+    n <- length(string_vector)
+    distinct_species <- paste0(1:n, collapse = ' ')
+    to_file <- c(n, string_vector, distinct_species)
+    assembled_string <- paste0(to_file, collapse = "\n")
+    
+    # print(assembled_string)
+  }
+}
+
+test_list <- list(threeprime_end_seq, input_seqs_test)
+lapply(test_list, function(x) parse_inputs(x))
+
+
+```
+
+### Exploring thermodynamics of the interaction between mega-primer and template
+
+During a lambda PCR reaction, there are three possible types of interactions
+involving the mega-primer and the vector template: 
+
+- Edges of the mega-primer binding to the template;
+- Edges of mega-primer binding to each other (forming a hairpin);
+- Self-binding on mega-primer edge (small hairpin structures)
+
+We can calculate the free energy and the formation probability of each of these
+complexes and evaluate if a mega-primer is good or not based on the calculated
+values. 
+
+#### Creating test dataset
+
+Our test dataset is the mega-primer to insert the GFP gene into the pUC19 plasmid
+at position 1500. 
+
 
