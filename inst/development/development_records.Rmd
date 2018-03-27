@@ -512,6 +512,7 @@ write_file(threeprime_end_seq, 'notebook_data/gfp_puc19_frag_3p.in')
 
 We can write a function that will pass the input files to NUPACK and retrieve
 the output:
+
 ```{r run-nupack-function}
 run_nupack <- function(input_file, melting_temperature, paired=TRUE) {
   #Extracting file prefix:
@@ -548,7 +549,7 @@ run_nupack <- function(input_file, melting_temperature, paired=TRUE) {
 
 ```{r run-nupack-seq-fragments-test}
 seq_fragments <- dir(path = '~/lambdaPrimeR/inst/development/notebook_data/', 
-                     pattern = '*.in', full.names = T)
+                     pattern = '*p.in', full.names = T)
 
 nupack_outputs <- tibble(input = seq_fragments) %>%
   group_by(input) %>%
@@ -565,6 +566,7 @@ primer:
 
 ```{r base-pair-prob-edges}
 unpaired_probabilities <- unpaired_probabilities %>%
+  ungroup() %>%
   mutate(input = case_when(
     ibase <= 40 ~ 'gfp_puc19_full_5p',
     ibase >= (nchar(test_seq) - 40) ~ 'gfp_puc19_full_3p',
@@ -881,19 +883,30 @@ parse_inputs <- function(string_vector) {
     n <- length(string_vector)
     distinct_species <- paste0(1:n, collapse = ' ')
     to_file <- c(n, string_vector, distinct_species)
+    
+    write_lines(to_file, path = "notebook_data/test_output.in")
     assembled_string <- paste0(to_file, collapse = "\n")
     
     # print(assembled_string)
   }
 }
 
-test_list <- list(threeprime_end_seq, input_seqs_test)
-lapply(test_list, function(x) parse_inputs(x))
+test_file_input <- read_lines("notebook_data/test_output.in")
+test_file_input
+```
+
+```{r nupack-args-parse}
+args <- c('pairs' , '-T', 45, '-material', 'dna', '-multi', 'prefix')
+args2 <- c('pairs' , '-T', 45, '-material', 'dna', '', 'prefix')
+paste0(args, collapse = ' ')
+paste0(args2, collapse = ' ')
 
 
 ```
 
-### Exploring thermodynamics of the interaction between mega-primer and template
+## 03/23/18
+
+### Free energy-based primer score
 
 During a lambda PCR reaction, there are three possible types of interactions
 involving the mega-primer and the vector template: 
@@ -904,11 +917,161 @@ involving the mega-primer and the vector template:
 
 We can calculate the free energy and the formation probability of each of these
 complexes and evaluate if a mega-primer is good or not based on the calculated
-values. 
+values. Our test dataset is the mega-primer to insert the GFP gene into the pUC19 
+plasmid at position 1500. We need a function to evaluate the thermodynamic 
+properties of a primer pair by computing the free energy of the different 
+possible strucutres listed above, and then calculating a "score" for each primer
+in the pair. The score can be calculated by
 
-#### Creating test dataset
+$$Z_{i} = \Delta G_{i,t} - \Delta G_{i,i} - \Delta G_{i,j}$$
+ where: 
 
-Our test dataset is the mega-primer to insert the GFP gene into the pUC19 plasmid
-at position 1500. 
+- $Z_{i}$: score of primer $i$;
+- $\Delta G_{i,t}$: free energy of the complex between primer $i$ and template $t$;
+- $\Delta G_{i,i}$: free energy of a secondary structure in primer $i$;
+- $\Delta G_{i,j}$: free energy of a dimer between primer $i$ and primer $j$;
+
+## 03/26/18
+
+### Calculating test primer scores
+
+#### Function to evaluate primers
+
+```{r evaluate-primer-function, message=FALSE, warning=FALSE}
+evaluate_primer <- function(primer_object, template_seq) {
+  #Reorganizing primer object
+  primers <- primer_object %>%
+    select(-type) %>%
+    gather(fragment, seq, -id) %>%
+    mutate(
+      seq = toupper(seq),
+      fragment = gsub('_seq', '', fragment)
+    )
+  
+  #Melting temperature calculations
+  tm <- primers %>%
+    filter(grepl('annealing', fragment)) %>%
+    group_by(id, fragment) %>%
+    do(
+      tm = melt_temperature(.$seq, 1e-07, 'Mg=1')
+    ) %>%
+    unnest() 
+  
+  #Annealing temparature
+  ta <- tm %>%
+    group_by(id, fragment) %>%
+    summarise(ta = min(tm) - 3) %>%
+    filter(grepl('template', fragment)) %>%
+    select(-fragment)
+
+  #NUPACK calculations of complete sequences:
+  nupack_results <- primers %>%
+    filter(!grepl('annealing', fragment)) %>%
+    left_join(ta)
+  
+  ####Creating sequence inputs for NUPACK runs:
+  fw_primer <- nupack_results$seq[nupack_results$id=='forward']
+  rv_primer <- nupack_results$seq[nupack_results$id=='reverse']
+  tm_min <- min(nupack_results$ta)
+
+  #Self-dimer formation free energy:
+  dimers <- tribble(
+    ~primer, ~complex, ~complex_type, ~dG,
+    'forward', 'foward', 'sdimer', nupack_pfunc(c(fw_primer, fw_primer), tm_min),
+    'reverse', 'reverse', 'sdimer', nupack_pfunc(c(rv_primer, rv_primer), tm_min),
+    'forward', 'reverse', 'hdimer', nupack_pfunc(c(fw_primer, rv_primer), tm_min),
+    'reverse', 'forward', 'hdimer', nupack_pfunc(c(rv_primer, fw_primer), tm_min)
+  ) %>%
+    unnest()
+
+  #MFE of individual primers
+  mfe <- tribble(
+    ~primer, ~complex, ~complex_type, ~mfe,
+    'forward', 'forward', 'hp', nupack_mfe(fw_primer, tm_min),
+    'reverse', 'reverse', 'hp', nupack_mfe(rv_primer, tm_min)
+  ) %>%
+    unnest() %>%
+    select(-structure, -base_pairs)
+  
+  # #Extracting region of template sequence around the insertion position:
+  # template_seq <- inputs %>%
+  #   filter(type == 'template') %>%
+  #   mutate(frag = substr(seq, 1400, 1600)) %>%
+  #   pull(frag)
+
+  #Primer-template complex free energy:
+  primer_template <- tribble(
+    ~primer, ~complex, ~complex_type, ~dG,
+    'forward', 'temp', 'ptemp', nupack_pfunc(c(fw_primer, template_seq), tm_min),
+    'reverse', 'temp', 'ptemp', nupack_pfunc(c(rv_primer, template_seq), tm_min)
+  ) %>%
+    unnest()
+  
+  #Creating output;
+  results <- bind_rows(dimers, mfe, primer_template)
+  return(results)
+  
+}
+```
+
+```{r evalating-test-primers}
+template_seq <- inputs %>%
+    filter(type == 'template') %>%
+    mutate(frag = substr(seq, 1400, 1600)) %>%
+    pull(frag)
+  
+system.time({results <- evaluate_primer(primers, template_seq)})
+results
+```
+
+The problem with the current code of the `evaluate_primer` function is that the 
+runtime for the `nupack_pfunc` function to calculate the $\Delta G$ of the 
+primer-template complex is too long (~120s). The `template_frag` sequence is 
+200 bp long (100 bp flanking the insert position of each side), and it might be
+too long. I can try to reduce the runtime by reducing the size of `template_frag`.
+
+#### Benchmarking `evaluate_primer` function with different fragment sizes
+
+```{r generate-template-fragments}
+flank_length <- c(40,50,60,70,80,90,100)
+template_seq <- inputs %>%
+  filter(type == 'template') %>%
+  pull(seq)
+
+fragments <- lapply(flank_length, 
+                    function(x) substr(template_seq, (1500-x), (1500+x)))
+test_functions <- lapply(fragments, 
+                         function(x) call("evaluate_primer", quote(primers), x))
+
+```
+
+```{r benchmark-evaluate-primers, message=FALSE, warning=FALSE}
+library(microbenchmark)
+microbenchmark(
+  list = setNames(test_functions, as.character(flank_length)), 
+  times = 5)
+
+```
+
+#### Calculating $Z_i$ score
+
+Now that we have a function to calculate all the free energies for the different 
+possible complexes between the primers and template, we can calculate the $Z_i$
+score for each primer:
+
+```{r primer-score}
+primer_score <- results %>%
+  select(-complex, -partition_func) %>%
+  spread(complex_type, dG) %>%
+  mutate_at(vars(hdimer, hp, ptemp, sdimer), funs(as.numeric(.))) %>%
+  mutate(z = ptemp - (sdimer + hdimer + hp))
+
+primer_score
+```
+
+We can interpret the $Z_i$ score as the stability of the template-primer complex, 
+taking into consideration the binding of the pimers to each other and to 
+themselves. **Lower $Z_i$ values indicate that the primer has a higher affinity** 
+**to the template**, which is what we want. 
 
 

@@ -5,16 +5,14 @@
 \title{Calculate the partition function of a DNA complex using NUPACK's \code{pfunc}
 tool.}
 \usage{
-nupack_pfunc(input_sequence, melting_temperature, multi = FALSE,
-  dangles = c("some", "none", "all"))
+nupack_pfunc(input_sequence, melting_temperature, dangles = c("some", "none",
+  "all"))
 }
 \arguments{
 \item{input_sequence}{A string corresponding to the input sequence.}
 
 \item{melting_temperature}{A numeric value indicating the melting temperature
 to be used during the NUPACK's calculations.}
-
-\item{multi}{Multiple input sequences? (Default is \code{FALSE}).}
 
 \item{dangles}{A string with the way in which dangle energies are 
 incorporated. Possible values: 

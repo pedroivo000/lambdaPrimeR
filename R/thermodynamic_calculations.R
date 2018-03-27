@@ -54,21 +54,27 @@ melt_temperature <- function(sequence, template_conc, ion_conc) {
 #' @return A data frame with base parameters for a NUPACK function
 nupack_args <- function(tool, input_sequence, melting_temperature,
                         dangles=c('some', 'none', 'all')){
+  
   #Creating temporary file for NUPACK:
   temp <- tempfile(fileext = '.in')
   
   #Checking number of input sequences:
   if(length(input_sequence) == 1) {
     #"-multi" flag:
+    multi <- FALSE
     multi_opt <- ''
+    
     #writing input to temporary file:
     write_file(input_sequence, temp)
   } else {
+   
     #"-multi" flag:
+    multi <- TRUE
     multi_opt <- "-multi"
+    
     #Writing sequences on temporary files:
     n_seqs <- length(input_sequence)
-    distininc_seqs <- paste0(1:n_seqs, collapse = ' ')
+    distinct_seqs <- paste0(1:n_seqs, collapse = ' ')
     file_content <- c(n_seqs, input_sequence, distinct_seqs)
     write_lines(file_content, temp)
   }
@@ -85,10 +91,10 @@ nupack_args <- function(tool, input_sequence, melting_temperature,
   
   #Storing args in a data frame:
   args <- tibble(
+    multi_bool = multi,
     base_command = base,
     prefix = file_prefix
   )
-  # print(args)
 }
 
 #' Calculate base-pairing probability using NUPACK's \code{pairs} tool.
@@ -111,7 +117,7 @@ nupack_pairs <- function(input_sequence, melting_temperature, paired=TRUE,
   #Parsing function variables to get NUPACK's base arguments:
   args <- nupack_args(tool = 'pairs', input_sequence, melting_temperature, dangles)
   
-  #cutoff:
+  #Probaility cutoff (unique parameter of pais function):
   if(is.null(cutoff)) {
     cutoff <- 0.001
   }
@@ -122,8 +128,12 @@ nupack_pairs <- function(input_sequence, melting_temperature, paired=TRUE,
   #Executing NUPACK command:
   system(command, intern = T)
   
-  #Import output file 
-  output_file <- paste(args$prefix, ".ppairs", sep = '')
+  #Import output file:
+  #Depending on "-multi" flag, a different input file will be generated - suffix 
+  #".ppairs" if multi=FALSE and ".epairs" if multi=TRUE.
+  output_file <- ifelse(args$multi_bool, 
+                        paste(args$prefix, ".epairs", sep = ''),
+                        paste(args$prefix, ".ppairs", sep = ''))
   nupack_output <- read_lines(output_file)
   
   #Deleting temp files
@@ -131,19 +141,30 @@ nupack_pairs <- function(input_sequence, melting_temperature, paired=TRUE,
   unlink(temp_files)
   
   #Parse output:
+  #Get total number of bases input sequence(s):
+  i <- grep('^\\d+$', nupack_output, perl = T) #get index
+  n_bases <- as.numeric(nupack_output[i])
+
+  #Base pairing probabilities:
   pair_probabilities <- tibble(lines = nupack_output) %>%
     filter(grepl('^\\d+\\t', lines)) %>%
     separate(lines, into = c('ibase', 'jbase', 'p'), sep = '\t') %>%
-    mutate_all(as.numeric) 
+    mutate_all(as.numeric)
+  
+  #Renaming 'p' column to 'exp_num' if multi=TRUE
+  if(args$multi_bool) {
+    pair_probabilities <- pair_probabilities %>%
+      rename(exp_num = p)
+  }
   
   #Extracting base pair probabilities by default (otherwise retrieve probability
   #of bases being unpaired):
   if(paired) {
     pair_probabilities %>%
-      filter(jbase < nchar(input_sequence)+1)
+      filter(jbase < n_bases+1)
   } else {
     pair_probabilities %>%
-      filter(jbase == nchar(input_sequence)+1)
+      filter(jbase == n_bases+1)
   }
 }
 
@@ -180,12 +201,20 @@ nupack_mfe <- function(input_sequence, melting_temperature,
   temp_files <- paste(args$prefix, ".*", sep = '')
   unlink(temp_files)
   
+  #Extracting base pairs:
+  base_pairs <- tibble(lines = nupack_output) %>%
+    filter(grepl('^\\d+\\t', lines)) %>%
+    separate(lines, into = c('ibase', 'jbase')) 
+  
   #Extract MFE value:
   mfe <- tibble(
-    seq = input_sequence,
-    mfe = nupack_output[15],
-    structure = nupack_output[16]
+    # seq = input_sequence,
+    dG = nupack_output[15],
+    structure = nupack_output[16],
+    base_pairs = list(base_pairs)
   )
+  
+ 
 }
 
 #' Calculate the partition function of a DNA complex using NUPACK's \code{pfunc}
@@ -213,88 +242,4 @@ nupack_pfunc <- function(input_sequence, melting_temperature,
     partition_func = nupack_output[15]
   )
   
-}
-
-
-#' Execute a NUPACK command-line tool and retrieve outputs.
-#'
-#' @param input_file The path or a vector containing the path to the NUPACK 
-#' input file (suffix ".in").
-#' @param melting_temperature A numeric value corresponding to the melting 
-#' temperature to be used during NUPACK's calculations.  
-#' @param exec A string indicating the name of the NUPACK command to be run: 
-#' "\code{pfunc}", "\code{pairs}" or "\code{mfe}". 
-#' 
-#' @param timed Time command runtime? Default is \code{FALSE}. 
-#' @param multi Multiple input sequences? Default is \code{FALSE}. 
-#' @param paired Return base pair formation probabilities from \code{pairs}
-#' command? Default it \code{TRUE}.
-#'
-#' @return A data frame containing different fields depending on the NUPACK
-#' command chosen with the \code{exec} parameter. 
-#' @export
-#'
-#' @examples
-run_nupack <- function(input_file, melting_temperature, exec, timed=FALSE, 
-                       multi=FALSE, paired=TRUE) {
-  #What NUPACK executable to run?
-  nupack_exec <- exec
-  
-  #Extracting file prefix:
-  file_prefix <- gsub('.in$', '', input_file)
-  
-  #Input sequence length:
-  input_seq <- read_file(input_file)
-  
-  #Running NUPACK with the input file
-  if(multi) {
-    nupack_command <- paste(nupack_exec, '-T', melting_temperature,
-                            '-material dna', '-multi', file_prefix)
-  } else {
-    nupack_command <- paste(nupack_exec, '-T', melting_temperature,
-                            '-material dna', file_prefix)
-  }
-  
-  #Importing correct output file for selected NUPACK executable:
-  if(nupack_exec == 'pairs') {
-    system(nupack_command, intern = T)
-    #Import output file 
-    output_file <- gsub('.in$', '.ppairs', input_file)
-    nupack_output <- read_lines(output_file)
-    
-    #extract base pair probabilities:
-    pair_probabilities <- tibble(lines = nupack_output) %>%
-      filter(grepl('^\\d+\\t', lines)) %>%
-      separate(lines, into = c('ibase', 'jbase', 'p'), sep = '\t') %>%
-      mutate_all(as.numeric) 
-    
-    if(paired) {
-      pair_probabilities %>%
-        filter(jbase < nchar(input_seq)+1)
-    } else {
-      pair_probabilities %>%
-        filter(jbase == nchar(input_seq)+1)
-    }
-  } else if (nupack_exec == 'mfe') {
-    system(nupack_command, intern = T)
-    #Import output file 
-    output_file <- gsub('.in$', '.mfe', input_file)
-    nupack_output <- read_lines(output_file)
-    
-    #extract MFE value:
-    mfe <- tibble(
-      input = file_prefix,
-      seq = input_seq,
-      mfe = nupack_output[15],
-      structure = nupack_output[16]
-    )
-  } else if (nupack_exec == 'pfunc') {
-    nupack_output <- system(nupack_command, intern = T)
-    
-    #extract dG and partion function:
-    pfunc <- tibble(
-      dG = nupack_output[14],
-      partition_func = nupack_output[15]
-    )
-  }
 }

@@ -4,8 +4,8 @@
 \alias{nupack_args}
 \title{Gather NUPACK's tools parameters.}
 \usage{
-nupack_args(tool, input_sequence, melting_temperature, multi,
-  dangles = c("some", "none", "all"))
+nupack_args(tool, input_sequence, melting_temperature, dangles = c("some",
+  "none", "all"))
 }
 \arguments{
 \item{tool}{Name of the NUPACK tool.}
@@ -14,8 +14,6 @@ nupack_args(tool, input_sequence, melting_temperature, multi,
 
 \item{melting_temperature}{A numeric value indicating the melting temperature
 to be used during the NUPACK's calculations.}
-
-\item{multi}{Multiple input sequences? (Default is \code{FALSE}).}
 
 \item{dangles}{A string with the way in which dangle energies are 
 incorporated. Possible values: 
@@ -28,6 +26,8 @@ incorporated. Possible values:
   \item \code{all}: A dangle energy is incorporated for each base flanking a 
   duplex regardless of whether it is paired.
 }}
+
+\item{multi}{Multiple input sequences? (Default is \code{FALSE}).}
 }
 \value{
 A data frame with base parameters for a NUPACK function

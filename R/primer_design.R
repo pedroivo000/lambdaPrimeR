@@ -113,7 +113,7 @@ create_primer_pair <- function(overlaps) {
     mutate(type = 'primer') %>%
     #extracting template and target annealing sequences
     mutate(temp = str_replace(seq, '([[:upper:]])', ',\\1')) %>%
-    separate(temp, into = c('template_annealing_seq', 'target_annealin_seq'),
+    separate(temp, into = c('template_annealing_seq', 'target_annealing_seq'),
              sep = ',') %>%
     select(-target, -template)
     

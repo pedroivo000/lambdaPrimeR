@@ -5,16 +5,14 @@
 \title{Minimum free energy (MFE) structure determination using NUPACK's \code{mfe} 
 tool.}
 \usage{
-nupack_mfe(input_sequence, melting_temperature, multi = FALSE,
-  dangles = c("some", "none", "all"), degenerate = FALSE)
+nupack_mfe(input_sequence, melting_temperature, dangles = c("some", "none",
+  "all"), degenerate = FALSE)
 }
 \arguments{
 \item{input_sequence}{A string corresponding to the input sequence.}
 
 \item{melting_temperature}{A numeric value indicating the melting temperature
 to be used during the NUPACK's calculations.}
-
-\item{multi}{Multiple input sequences? (Default is \code{FALSE}).}
 
 \item{dangles}{A string with the way in which dangle energies are 
 incorporated. Possible values: 

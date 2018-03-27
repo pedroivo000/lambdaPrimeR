@@ -5,15 +5,13 @@
 \title{Calculate base-pairing probability using NUPACK's \code{pairs} tool.}
 \usage{
 nupack_pairs(input_sequence, melting_temperature, paired = TRUE,
-  multi = FALSE, dangles = c("some", "none", "all"), cutoff = NULL)
+  dangles = c("some", "none", "all"), cutoff = NULL)
 }
 \arguments{
 \item{input_sequence}{A string corresponding to the input sequence.}
 
 \item{melting_temperature}{A numeric value indicating the melting temperature
 to be used during the NUPACK's calculations.}
-
-\item{multi}{Multiple input sequences? (Default is \code{FALSE}).}
 
 \item{dangles}{A string with the way in which dangle energies are 
 incorporated. Possible values: 
