@@ -1,0 +1,30 @@
+% NUPACK 3.2.2
+% Program: mfe
+% Start time: Fri Mar 23 11:09:02 2018
+% Command: mfe -T 45 -material dna -multi test_output 
+% Sequence:  TGGACGAGCTGTACAAGTAAGAAAACTCACGTTAAGGGATT+GGGTCTGACGCTCAGTGGAACATGGTGAGCAAGGGCGAGG
+% v(pi): 1
+% Parameters: DNA, 1998
+% Dangles setting: 1
+% Temperature (C): 45.0
+% Sodium concentration: 1.0000 M
+% Magnesium concentration: 0.0000 M
+
+% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% %
+81
+-9.011
+....((.................(((....)))........+.........(((((.((.....)).))))).....))...
+5	78
+6	77
+24	33
+25	32
+26	31
+51	71
+52	70
+53	69
+54	68
+55	67
+57	65
+58	64
+% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% %
+

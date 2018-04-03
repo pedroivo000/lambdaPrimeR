@@ -1,7 +1,7 @@
 % NUPACK 3.2.2
 % Program: pairs
-% Start time: Thu Mar 22 17:46:16 2018
-% Command: pairs -T 45 -material dna -dangles some gfp_puc19_frag_3p 
+% Start time: Fri Mar 23 14:42:06 2018
+% Command: pairs -T 45 -material dna /Users/pedro_work/lambdaPrimeR/inst/development/notebook_data//gfp_puc19_frag_3p 
 % Minimum printed pair probability: 0.001
 % Sequence:  TGGACGAGCTGTACAAGTAAGAAAACTCACGTTAAGGGATT
 % v(pi): 1

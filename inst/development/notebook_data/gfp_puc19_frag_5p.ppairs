@@ -1,6 +1,6 @@
 % NUPACK 3.2.2
 % Program: pairs
-% Start time: Fri Mar 16 14:23:21 2018
+% Start time: Fri Mar 23 14:42:06 2018
 % Command: pairs -T 45 -material dna /Users/pedro_work/lambdaPrimeR/inst/development/notebook_data//gfp_puc19_frag_5p 
 % Minimum printed pair probability: 0.001
 % Sequence:  GGGTCTGACGCTCAGTGGAACATGGTGAGCAAGGGCGAGG

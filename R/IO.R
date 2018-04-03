@@ -5,7 +5,7 @@
 
 #'Read sequences from file.
 #'
-#'\code{read_sequences} reads a FASTA file into a dataframe, one sequence per
+#'\code{read_sequences_noclass} reads a FASTA file into a dataframe, one sequence per
 #'row. This function also adds a \code{type} tag to each sequence, indicating if
 #'they are either a \code{target} gene or a \code{template} sequence. User can
 #'optionally select what part of the sequence header will be used as internal
@@ -25,9 +25,9 @@
 #'@export
 #'
 #' @examples
-#' read_sequences("data/test.fasta", input_type = 'target')
-#' read_sequences("data/test.fasta", id_field = 'name', separator = '-')
-read_sequences <- function(sequence_input, input_type, input_df=NULL,
+#' read_sequences_noclass("data/test.fasta", input_type = 'target')
+#' read_sequences_noclass("data/test.fasta", id_field = 'name', separator = '-')
+read_sequences_noclass <- function(sequence_input, input_type, input_df=NULL,
                            id_field = NULL, separator = NULL) {
   raw <- tibble(text = read_file(sequence_input))
   

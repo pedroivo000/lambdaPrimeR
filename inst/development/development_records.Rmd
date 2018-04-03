@@ -976,7 +976,7 @@ evaluate_primer <- function(primer_object, template_seq) {
 
   #Self-dimer formation free energy:
   dimers <- tribble(
-    ~primer, ~complex, ~complex_type, ~dG,
+    ~primer, ~ta, ~complex, ~complex_type, ~dG,
     'forward', 'foward', 'sdimer', nupack_pfunc(c(fw_primer, fw_primer), tm_min),
     'reverse', 'reverse', 'sdimer', nupack_pfunc(c(rv_primer, rv_primer), tm_min),
     'forward', 'reverse', 'hdimer', nupack_pfunc(c(fw_primer, rv_primer), tm_min),
@@ -1073,5 +1073,536 @@ We can interpret the $Z_i$ score as the stability of the template-primer complex
 taking into consideration the binding of the pimers to each other and to 
 themselves. **Lower $Z_i$ values indicate that the primer has a higher affinity** 
 **to the template**, which is what we want. 
+
+## 03/27/18
+
+### Implementing S4 Classes in `lambdaPrimeR`
+
+#### `Template` class
+
+The `Template` class corresponds to the target gene and plasmid vector sequences
+inputs to the 
+
+```{r template-class}
+.TemplateClass <- setClass("TemplateClass", contains = c("data.frame"))
+.TemplateClass
+```
+
+```{r template-class-constructor}
+.TemplateClass()
+```
+I need to make sure that the value supplied to the `TemplateClass` constructor 
+is a data frame, so we need a helper function:
+
+```{r constructor-helper-function}
+TemplateClass <- function(df, ...) .TemplateClass(df, ...)
+TemplateClass()
+```
+
+
+```{r template-class-object}
+df <- inputs %>%
+  filter(type == "template")
+
+template_object <- TemplateClass(df)
+template_object
+```
+
+I think the basic slots on the `TemplateClass` class should be:
+
+- `path`: a string containing the path to the input fasta file;
+- `data`: data frame with the sequence information;
+
+```{r template-class-update}
+.TemplateClass <- setClass("TemplateClass", 
+                           contains = c("data.frame"))
+.TemplateClass
+
+```
+
+We can create two subclasses from `TemplateClass` that will represent each 
+different type of templates (target and vectors):
+
+```{r target-and-vector-classes}
+.TargetClass <- setClass("TargetClass",
+                         contains = c("TemplateClass"))
+
+.VectorClass <- setClass("VectorClass",
+                         contains = c("TemplateClass"))
+
+
+.TargetClass
+.VectorClass
+```
+
+## 03/29/18
+
+### Updating `read_sequence` function to work with the S4 class system
+
+We first need to write a helper function to create new `TargetClass` and 
+`VectorClass` objects from an input fata frame:
+
+```{r subclasses-constructor-functions}
+TargetClass <- function(df, ...) .TargetClass(df, ...)
+VectorClass <- function(df, ...) .VectorClass(df, ...)
+```
+
+We can change the `read_sequence` function to read a fasta file and assign the 
+input to a specific class depending on the value of the `input_type` argument.
+
+```{r read-sequences-class-update}
+read_sequences <- function(file, input_type = c('target', 'vector'),
+                           id_field = NULL, separator = NULL) {
+  
+  #Checking input type:
+  type <- match.arg(input_type)
+  
+  #Reading fasta file into a column:
+  raw <- tibble(text = read_file(file))
+  
+  #Converting the raw text column into the correct format:
+  df <- raw %>%
+    separate_rows(text, sep = '\n>') %>%
+    separate(text, into = c('header', 'seq'), sep = '\n', extra = 'merge') %>%
+    mutate(
+      path = file, 
+      type = input_type,
+      seq = stringr::str_replace_all(seq, '\n', ''),
+      header = stringr::str_replace(header, '>', ''),
+      length = nchar(seq)
+    )
+  
+  #Checking if optional parameters were passed
+  if(is.null(id_field)) {
+    id_field <- 'name'
+  }
+  if(is.null(separator)) {
+    separator <- '\\|'
+  }
+  
+  #Creating sequence id from seq header
+  df <- df %>%
+    separate(header, into = id_field, remove = F, extra = 'drop', sep = separator)
+  
+  #Checking what type of input was provided and creating appropriate class obj.:
+  # object <- switch (input_type,
+  #   'target' = TargetClass(df),
+  #   'vector' = VectorClass(df)
+  # )
+  
+  return(df)
+  
+  #Appending new input to input dataframe if input_df object was provided:
+  # if(!is.null(input_df)) {
+  #   input_df <- bind_rows(input_df, df)
+  # } else {
+  #   df
+  # }
+}
+
+```
+
+```{r testing-class-version-read-sequences}
+target_object <- read_sequences(target, input_type = 'target')
+vector <- read_sequences(template, input_type = 'vector')
+
+```
+
+## 03/30/18
+
+### Testing primer score function with variations of test primer
+
+#### Increasing lengths of vector and target annealing regions
+
+In order to test how the length of a primer affects the $Z_i$ score, I'll use the
+`get_overlaps` function to extract the vector and target annealing regions from
+the input sequences with increasing lengths:
+
+```{r create-multiple-primers}
+annealing_region_lengths <- c(10:30)
+overlaps <- lapply(annealing_region_lengths, 
+                   function(x) get_overlaps(inputs, position = 1500, 
+                                            vector_ovlp_length = x,
+                                            target_ovlp_length = x))
+
+var_length_primers <- lapply(overlaps, function(x) create_primer_pair(x))
+
+```
+
+```{r evaluate-primers, message=FALSE, warning=FALSE}
+primer_eval <- lapply(var_length_primers, 
+                      function(x) evaluate_primer(x, template_seq))
+```
+
+```{r multiple-length-primer-score}
+names(primer_eval) <- annealing_region_lengths
+primer_eval_df <- bind_rows(primer_eval, .id = 'length') %>%
+  mutate(
+    length = as.numeric(length),
+    dG = as.numeric(dG)
+  )
+
+calculate_primer_score <- function(primer_eval_df) {
+  score <- primer_eval_df %>%
+  select(-complex, -partition_func) %>%
+  spread(complex_type, dG) %>%
+  mutate_at(vars(hdimer, hp, ptemp, sdimer), funs(as.numeric(.))) %>%
+  mutate(z = ptemp - (sdimer + hdimer + hp))
+}
+
+primer_scores <- primer_eval_df %>%
+  group_by(length) %>%
+  do(
+    calculate_primer_score(.)
+  )
+```
+
+
+```{r plot-score-vs-primer-length}
+primer_scores %>%
+  ggplot(., aes(x=length, y=z)) +
+  facet_grid(~ primer) +
+  geom_point()
+```
+```{r plot-dG-vs-primer-length}
+primer_eval_df %>%
+  ggplot(., aes(x=length, y=dG, color = primer)) +
+  facet_grid(~complex_type) +
+  geom_point()
+
+```
+
+It seems like that increasing the length of both the template and target 
+annealing regions of the primers increased the value of the $Z_i$ score,
+indicating that as both edges of the primer gets longer. In the second plot, 
+we can that $\Delta G_{i,t}$, the free energy of the complex between the primer 
+and the template (`ptemp`) decreases as the primers get longer. The presence of
+the longer dangling tagert-annealing region of the pimer could be casuing this 
+reduction in $\Delta G_{i,t}$. I need to modify the `get_overlaps` function to 
+only increase one of the edges when doing this type of analysis. 
+
+#### Primers with variation only on the length of the vector-annealing region
+
+We first need to update the `get_overlaps` function to allow different lenghts 
+for the different overlapping regions:
+
+```{r get-overlaps-fun-update}
+get_overlaps <- function(sequence_inputs, position=NULL, 
+                         vector_ovlp_length=NULL,
+                         target_ovlp_length=NULL) {
+  #Initialize empty overlap object
+  overlaps <- tibble(
+    id = character(),
+    type = character(),
+    origin = character(),
+    seq = character()
+  )
+  
+  #Function to find overlaps on each input type:
+  find_overlaps <- function(data) {
+    #Checking what type of input was passed:
+    if(data$type == 'template') {
+      length <- vector_ovlp_length
+      #Using default overlap length of 20 if not provided:
+      overlap_length <- ifelse(is.null(length), 20, length)
+      #Extracting overlaps
+      overlap_left <- substr(data$seq, (position-overlap_length), position)
+      overlap_right <- substr(data$seq, (position+1), (overlap_length+position+1))
+      #Populating overlap object:
+      overlaps <- overlaps %>%
+        add_row(id = 'left', type = 'overlap', origin = 'template', seq = overlap_left) %>%
+        add_row(id = 'right', type = 'overlap', origin = 'template', seq = overlap_right)
+    } else {
+      #Using default overlap length of 15 if not provided:
+      length <- target_ovlp_length
+      overlap_length <- ifelse(is.null(length), 15, length)
+      #Extracting overlaps
+      overlap_left <- substr(data$seq, 1, overlap_length)
+      overlap_right <- substr(data$seq, data$length-overlap_length, data$length)
+      #Populating overlap object:
+      overlaps <- overlaps %>%
+        add_row(id = 'left', type = 'overlap', origin = 'target', seq = overlap_left) %>%
+        add_row(id = 'right', type = 'overlap', origin = 'target', seq = overlap_right)
+    }
+  }
+  
+  #Extracting overlaps
+  sequence_inputs %>%
+    group_by(type) %>%
+    do(find_overlaps(.)) %>%
+    ungroup()
+}
+
+
+```
+
+Let's recalculate the primer scores with just the vector-annealing region
+increasing in size:
+
+```{r evaluate-primers-increasing-vector-region}
+overlaps <- lapply(annealing_region_lengths, 
+                   function(x) get_overlaps(inputs, position = 1500,
+                                            vector_ovlp_length = x))
+var_length_primers <- lapply(overlaps, create_primer_pair)
+varying_vector_reg <- lapply(var_length_primers, 
+                      function(x) evaluate_primer(x, template_seq))
+```
+
+```{r vector-annealing-regions-primer-score}
+names(varying_vector_reg) <- annealing_region_lengths
+vector_reg_primer_eval_df <- bind_rows(varying_vector_reg, .id = 'length') %>%
+  mutate(
+    length = as.numeric(length),
+    dG = as.numeric(dG)
+  )
+
+vector_reg_primer_scores <- vector_reg_primer_eval_df %>%
+  group_by(length) %>%
+  do(
+    calculate_primer_score(.)
+  )
+```
+
+```{r plot-score-vs-vector-anneling-length}
+vector_reg_primer_scores %>%
+  ggplot(., aes(x=length, y=z)) +
+  facet_grid(~ primer) +
+  geom_point()
+
+vector_reg_primer_eval_df %>%
+  ggplot(., aes(x=length, y=dG, color = primer)) +
+  facet_grid(~complex_type) +
+  geom_point()
+```
+
+```{r}
+scores_merged <- bind_rows(vector_reg_primer_scores, primer_scores, .id = 'id') %>%
+  mutate(id = ifelse(id == 1, 'increase_vector', 'increase_both'))
+
+thermodynamics_merged <- bind_rows(vector_reg_primer_eval_df, primer_eval_df, 
+                                   .id = 'id') %>%
+    mutate(id = ifelse(id == 1, 'increase_vector', 'increase_both'))
+
+scores_merged %>%
+  ggplot(., aes(x=length, y=z, color = id)) +
+  facet_grid(~primer)+
+  geom_point()+
+  plot_theme
+
+thermodynamics_merged %>%
+  ggplot(., aes(x=length, y=dG, color = id)) +
+  facet_grid(primer~complex_type) +
+  geom_point()+
+  plot_theme
+```
+
+The changes in $Z_i$ score when just the vector-annealing region of the primer
+is modified are very similar to when both regions are modified. However, the
+rate of how the $Z$ score reduces with the length of the annealing regions seems
+to be lower when the length of the target annealing region of the primer is kept
+constant. 
+
+#### Benchmarking `evaluate_primers` function with primer with inscreasing length 
+
+```{r benchmark-primer-length, warning=FALSE, message=FALSE}
+library(microbenchmark)
+test_functions <- lapply(var_length_primers, 
+                         function(x) call("evaluate_primer", x, quote(template_seq)))
+
+microbenchmark(
+  list = setNames(test_functions, as.character(annealing_region_lengths)), 
+  times = 1)
+
+```
+
+## 03/31/18
+
+### Object validation function for `TemplateClass`
+
+In order to make sure that the `TemplateClass` will have the correct fields and 
+data format, we need to write a validation function that will check if the 
+input is a data frame with the minimum required columns. We need at least the 
+following columns for each template input:
+
+ - `path`: path to input file;
+ - `header`: complete string of the sequence's FASTA header;
+ - `name`: parsed fragment of the sequence header that will be used as the 
+ template name;
+ - `sequence`: template sequence;
+ - `length`: sequence length;
+ - `id`: internal numeric id that will group a set of `Target`, `VectorClass` and 
+ `Primer` objects;
+ 
+ Let's first find out how to test the type of a column against a defined column 
+ type:
+ 
+```{r}
+required_columns <- tribble(
+  ~cols, ~req_class,
+  'path','character', 
+  'header','character',
+  'id','character', 
+  'seq','character', 
+  'type','character', 
+  'length','integer'
+)
+
+column_types <- as.data.frame(lapply(df, class)) %>%
+  gather(cols, test_class)
+
+discrepancies <- full_join(required_columns, column_types) %>%
+  mutate(test = ifelse(req_class == test_class, TRUE, FALSE)) %>%
+  do(
+    msg = case_when(
+      is.na(.$test) ~ paste("Missing required column:", .$cols),
+      !(.$test) ~ paste("Column ", .$cols, " type is incorrect. ",
+                        "Required type is ", .$req_class, ", current type is ",
+                        .$test_class, ".", sep = ''),
+      (.$test) ~ NA_character_
+    )
+  ) %>%
+  unnest() %>%
+  filter(!is.na(msg))
+```
+ 
+We can now write a validation function for out `TemplateClass`:
+
+```{r template-validity-class}
+validate_template <- function(object) {
+  errors <- NULL
+
+  #Checking if object is data frame:
+  if(!is.data.frame(object)) {
+      errors <- c(errors, "Input was not a data frame")
+      return(FALSE)
+  }
+  
+  #Checking if required columns are present with the correct format:
+  required_columns <- tribble(
+    ~cols, ~req_class,
+    'path','character', 
+    'header','character',
+    'name','character', 
+    'seq','character', 
+    'type','character', 
+    'length','numeric'
+  )
+  #Creating data frame with column types:
+  column_types <- as.data.frame(lapply(df, class)) %>%
+    gather(cols, test_class)
+  
+  #Checking column types against required columns:
+  discrepancies <- full_join(required_columns, column_types) %>%
+    mutate(test = ifelse(req_class == test_class, TRUE, FALSE)) %>%
+    do(
+      msg = case_when(
+        is.na(.$test) ~ paste("Missing required column: ", .$cols, ";\n", sep = ''),
+        !(.$test) ~ paste("Column ", .$cols, " type is incorrect: ",
+                          "required type is ", .$req_class, ", current type is ",
+                          .$test_class, ";\n", sep = ''),
+        (.$test) ~ NA_character_
+      )
+    ) %>%
+    unnest() %>%
+    filter(!is.na(msg))
+  
+  errors <- c(errors, discrepancies$msg)
+  return(errors)
+}
+
+```
+
+Let's add this validation function to the `TargetClass` constructor function:
+
+```{r targetclass-constructor-w-validation}
+TargetClass <- function(df, ...) {
+  #Calling validation function:
+  errors <- validate_template(df)
+  
+  if(length(errors) != 0) {
+    message(errors)
+    
+    
+    # return(FALSE)
+  }
+  .TargetClass(df, ...)
+}  
+
+df <- inputs %>%
+  filter(type == "template")
+
+test_validation_func <- TargetClass(df)
+```
+
+### Adding method to get overlaps for both `Target` and `VectorClass`
+
+#Create generic function and methods for `get_annealing_regions`
+
+```{r get-overlap-methods}
+setGeneric("get_annealing_regions", 
+           function(template, position = NULL, min_length = NULL, 
+                    max_length = NULL, ...) {
+             standardGeneric("get_annealing_regions")
+})
+```
+
+Let's create methods for `get_annealing_regions` that will extract a different
+region from depending on the type of template:
+
+```{r get-annealing-regios-methods}
+setMethod("get_annealing_regions", 
+  signature = "TargetClass",
+  function(template, min_length = NULL, max_length = NULL) {
+    #Using minimum allowed length as the length of the annealing region; 
+    #otherwise use the default of 15 bp.
+    length <- ifelse(is.null(min_length), 15, min_length)
+    
+    #Saving sequence slot from template class in a variable:
+    seq <- template@seq
+    seq_length <- template@length
+    
+    #When extracting the annealing regions from the target sequence, we need to 
+    #get the 5' and 3' ends of the gene sequence:
+    #Extracting overlaps
+    target_annealing_left <- substr(seq, 1, length)
+    target_annealing_right <- substr(seq, seq_length-length, length)
+    
+    #Adding new information to Target object:
+    # annealing_regions <- tibble(
+    #   min_length = integer(),
+    #   max_length = integer(),
+    #   annealing_reg_left_beg = integer(),
+    #   annealing_reg_left_end = integer(),
+    #   annealing_reg_right_beg = integer(),
+    #   annealing_reg_right_end = integer(),
+    #   annealing_reg_left_seq = character(),
+    #   annealing_reg_right_seq = character()
+    # )
+    
+    annealing_regions <- tibble(
+      min_length = min_length,
+      max_length = max_length,
+      annealing_reg_left_beg = 1,
+      annealing_reg_left_end = length,
+      annealing_reg_right_beg = seq_length - length,
+      annealing_reg_right_end = seq_length,
+      annealing_reg_left_seq = target_annealing_left,
+      annealing_reg_right_seq = target_annealing_right
+    )
+    
+    template <- bind_cols(template, annealing_regions)
+  }
+)
+
+```
+
+```{r}
+target_input <- system.file('extdata', 'GFP sequence.fasta', package = "lambdaPrimeR")
+target_df <- read_sequences(target_input, input_type = 'target')
+target_object <- TargetClass(target_df)
+
+# test_getannealing_methods <- get_annealing_regions(target_object, 
+#                                                    min_length = 15)
+```
 
 
