@@ -12,3 +12,13 @@ Imports: shiny,
     tidyverse,
     stringr,
     methods
+Collate: 
+    'IO.R'
+    'Primers.R'
+    'Template_classes.R'
+    'Run_class.R'
+    'pkg_imports.R'
+    'primer_design.R'
+    'run_app_ui.R'
+    'sequence_tools.R'
+    'thermodynamic_calculations.R'

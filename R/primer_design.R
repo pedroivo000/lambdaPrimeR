@@ -2,6 +2,89 @@
 #Primer design
 ##############
 
+#' Extract target or vector-annealing regions from Template sequences. 
+#'
+#' @param template 
+#' @param position 
+#' @param min_length 
+#' @param max_length 
+#' @param ... 
+#'
+#' @return
+#' @export
+#'
+#' @examples
+setGeneric("get_annealing_regions", 
+ function(template, position = NULL, min_length = NULL, max_length = NULL, ...) {
+   standardGeneric("get_annealing_regions")
+})
+
+setMethod("get_annealing_regions", 
+  signature = "Target",
+  function(template, min_length = NULL, max_length = NULL) {
+    #Using minimum allowed length as the length of the annealing region; 
+    #otherwise use the default of 15 bp.
+    length <- ifelse(is.null(min_length), 15, min_length)
+    
+    #Saving sequence slot from template class in a variable:
+    seq <- template$seq
+    seq_length <- template$length
+    
+    #When extracting the annealing regions from the target sequence, we need to 
+    #get the 5' and 3' ends of the gene sequence:
+    #Extracting overlaps
+    target_annealing_left <- substr(seq, 1, length)
+    target_annealing_right <- substr(seq, (seq_length-length), seq_length)
+    
+    #Adding annealing region info to target object:
+    template$target_anneal_min_length <- min_length
+    template$target_anneal_max_length <- max_length
+    template$target_anneal_left_beg <- 1
+    template$target_anneal_left_end <- length
+    template$target_anneal_right_beg <- seq_length - length
+    template$target_anneal_right_end <- seq_length
+    template$target_anneal_left_seq <- target_annealing_left
+    template$target_anneal_right_seq <- target_annealing_right
+
+    return(template)
+  }
+)
+
+setMethod("get_annealing_regions", 
+          signature = "Vector",
+          function(template, position = NULL, min_length = NULL, max_length = NULL) {
+            #Using minimum allowed length as the length of the annealing region; 
+            #otherwise use the default of 15 bp.
+            length <- ifelse(is.null(min_length), 15, min_length)
+            
+            #Saving sequence slot from template class in a variable:
+            seq <- template$seq
+            seq_length <- template$length
+            
+            #When extracting the annealing regions from the target sequence, we need to 
+            #get the 5' and 3' ends of the gene sequence:
+            #Extracting overlaps
+            vector_annealing_left <- substr(seq, (position-length), position)
+            vector_annealing_right <- substr(seq, (position+1), (position+length+1))
+            
+            #Adding annealing region info to target object:
+            template$vector_anneal_min_length <- min_length
+            template$vector_anneal_max_length <- max_length
+            template$vector_anneal_left_beg <- position - length
+            template$vector_anneal_left_end <- position
+            template$vector_anneal_right_beg <- position + 1
+            template$vector_anneal_right_end <- position + length + 1
+            template$vector_anneal_left_seq <- vector_annealing_left
+            template$vector_anneal_right_seq <- vector_annealing_right
+            
+            return(template)
+          }
+)
+
+# add_overlaps <- function(overlap_df) {
+#   cols <- colnames(overlap_df)
+# }
+
 #' Extract overlaps from input sequences.
 #'
 #' @param sequence_inputs A dataframe containing the target and template input
