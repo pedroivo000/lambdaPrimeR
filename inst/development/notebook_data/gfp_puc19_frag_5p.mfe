@@ -1,10 +1,10 @@
 % NUPACK 3.2.2
 % Program: mfe
-% Start time: Wed Mar 21 16:33:00 2018
-% Command: mfe -T 45 gfp_puc19_frag_5p 
+% Start time: Wed May  2 11:00:10 2018
+% Command: mfe -T 45 -material dna lambdaPrimeR/inst/development/notebook_data/gfp_puc19_frag_5p 
 % Sequence:  GGGTCTGACGCTCAGTGGAACATGGTGAGCAAGGGCGAGG
 % v(pi): 1
-% Parameters: RNA, 1995
+% Parameters: DNA, 1998
 % Dangles setting: 1
 % Temperature (C): 45.0
 % Sodium concentration: 1.0000 M
@@ -12,12 +12,8 @@
 
 % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% %
 40
--8.310
-..((((...(((((.((.....)).)))))..))))....
-3	36
-4	35
-5	34
-6	33
+-3.286
+.........(((((.((.....)).)))))..........
 10	30
 11	29
 12	28

@@ -2,7 +2,9 @@
 title: "Development records notebook"
 author: "Pedro Ivo Guimarães"
 description: LambdaPCR development archiving notebook
-output: html_notebook
+output: 
+  html_notebook:
+    toc: yes
 ---
 
 # Packages and global options
@@ -39,8 +41,8 @@ read_sequence <- function(file, ...) {
     )
 }
 
-template <- read_sequence("../data/puc19.fasta")
-target <- read_sequence("../data/GFP sequence.fasta")
+template <- read_sequence("../extdata/puc19.fasta")
+target <- read_sequence("../extdata/GFP sequence.fasta")
 ```
 
 ## 02-28-18
@@ -75,8 +77,8 @@ read_sequence <- function(file, id_field = NULL, separator = NULL) {
     separate(header, into = id_field, extra = 'drop', sep = separator)
 }
 
-template <- read_sequence("../data/puc19.fasta")
-target <- read_sequence("../data/GFP sequence.fasta")
+template <- read_sequence("../extdata/puc19.fasta")
+target <- read_sequence("../extdata/GFP sequence.fasta")
 ```
 
 # March
@@ -114,8 +116,8 @@ read_sequence <- function(file, input_type, id_field = NULL, separator = NULL) {
     separate(header, into = id_field, remove = F, extra = 'drop', sep = separator)
 }
 
-template <- read_sequence("../data/puc19.fasta", input_type = 'template')
-target <- read_sequence("../data/GFP sequence.fasta", input_type = 'target')
+template <- read_sequence("../extdata/puc19.fasta", input_type = 'template')
+target <- read_sequence("../extdata/GFP sequence.fasta", input_type = 'target')
 ```
 
 ### Design primers for gene insertion
@@ -333,8 +335,8 @@ and the pUC19 plasmid sequence as template. The insertion coordinate is 1500.
 #Input sequences:
 target <- system.file('extdata', 'GFP sequence.fasta', package = 'lambdaPrimeR')
 template <- system.file('extdata', 'puc19.fasta', package = 'lambdaPrimeR')
-inputs <- read_sequences(target, input_type = 'target')
-inputs <- read_sequences(template, input_df = inputs, input_type = 'template')
+inputs <- read_sequences_noclass(target, input_type = 'target')
+inputs <- read_sequences_noclass(template, input_df = inputs, input_type = 'template')
 
 #get sequence overlaps:
 overlaps <- get_overlaps(inputs, 1500)

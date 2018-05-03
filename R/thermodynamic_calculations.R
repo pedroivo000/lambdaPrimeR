@@ -2,34 +2,118 @@
 #Thermodynamic calculations
 ###########################
 
+
+#' Calculate primer binding free energies.
+#' 
+#' This function is used to calculate the binding free energy of each primer in
+#' primer pair for different complexes: hairping formation, homodimer (primer
+#' binding to itself), heterodimer (forward and reverse primer binding to each
+#' other) and the primer-vector complex.
+#' 
+#'
+#' @param run_object An object of the Run class, containing the target and vector
+#' inputs. 
+#'
+#' @return A dataframe containing the calculated free energy for each primer's
+#' hairpin, homodimer, heterodimer and primer-vector complex. 
+#' 
+#' @export
+#'
+#' @examples
+evaluate_primers <- function(run_object) {
+  #Extracting primer object:
+  primers <- run_object@primers
+  #Get primer sequences:
+  primer_sequences <- get_sequences(primers)
+  
+  #Extracting region of template sequence around the insertion position:
+  vector <- run_object@vector
+  insert_position <- vector$vector_anneal_left_end
+  vector_seq <- substr(vector$seq, (insert_position - 49), (insert_position + 50))
+  
+  
+  #Calculating melting temperatures:
+  tmd_values <- primer_sequences %>%
+    mutate(seq = toupper(seq)) %>%
+    group_by(orientation, primer_region) %>%
+    mutate(tm = melt_temperature(seq))
+  
+  #Annealing temparature
+  tmd_values <- tmd_values %>%
+    group_by(primer_region) %>%
+    mutate(ta = min(tm) + 3)
+  
+  ta_vector <- unique(tmd_values$ta[tmd_values$primer_region=='vector'])
+  
+  #NUPACK calculations of complete sequences:
+  seqs <- primer_sequences %>%
+    filter(primer_region == 'complete') %>%
+    pull(seq)
+  names(seqs) <- c('fw', 'rv')
+  
+  #Self-dimer formation free energy:
+  dimers <- tribble(
+    ~primer, ~complex, ~complex_type, ~ta, ~dG,
+    'forward', 'foward', 'sdimer', ta_vector, nupack_pfunc(c(seqs['fw'], seqs['fw']), ta_vector),
+    'reverse', 'reverse', 'sdimer', ta_vector, nupack_pfunc(c(seqs['rv'], seqs['rv']), ta_vector),
+    'forward', 'reverse', 'hdimer', ta_vector, nupack_pfunc(c(seqs['fw'], seqs['rv']), ta_vector),
+    'reverse', 'forward', 'hdimer', ta_vector, nupack_pfunc(c(seqs['rv'], seqs['fw']), ta_vector)
+  ) %>%
+    unnest() %>%
+    select(-partition_func)
+  
+  #MFE of individual primers
+  mfe <- tribble(
+    ~primer, ~complex, ~complex_type, ~ta, ~mfe,
+    'forward', 'forward', 'hp', ta_vector, nupack_mfe(seqs['fw'], ta_vector),
+    'reverse', 'reverse', 'hp', ta_vector, nupack_mfe(seqs['rv'], ta_vector)
+  ) %>%
+    unnest() %>%
+    select(-structure, -base_pairs)
+  
+  #Primer-template complex free energy:
+  primer_template <- tribble(
+    ~primer, ~complex, ~complex_type, ~ta, ~dG,
+    'forward', 'temp', 'ptemp', ta_vector, nupack_pfunc(c(seqs['fw'], vector_seq), ta_vector),
+    'reverse', 'temp', 'ptemp', ta_vector, nupack_pfunc(c(seqs['rv'], vector_seq), ta_vector)
+  ) %>%
+    unnest() %>%
+    select(-partition_func)
+  
+  #Creating output;
+  results <- bind_rows(dimers, mfe, primer_template) %>%
+    select(-complex) %>%
+    spread(complex_type, dG) %>%
+    mutate_at(vars(hdimer, hp, ptemp, sdimer), funs(as.numeric(.))) %>%
+    mutate(z = ptemp - (sdimer + hdimer + hp))
+  
+  return(results)
+}
+
 #' Calculate primer melting temperature. 
 #'
 #' @param sequence A string corresponding to the primer sequence.
-#' @param template_conc A numeric value corresponding to the DNA template 
-#' concentration. Defauts to $10^-4$ M. 
-#' @param ion_conc A string corresponding to the concentration of ion. See 
-#' MELTING documentation for details. 
+#' @param template_conc A numeric value corresponding to the concentration of 
+#' the DNA molecule in excess. During PCR experiments, this value correspond to 
+#' the primer concentrations. Defauts to $10^-6$ M. 
+#' @param ion_conc A string corresponding to the concentration of ion (see 
+#' MELTING documentation for details). Defaults to \code{Mg=2e-03}.
 #'
 #' @return A dataframe containing the primer sequence and the calculated melting
 #' temperature \code{tm}.
 #' @export
 #'
 #' @examples
-melt_temperature <- function(sequence, template_conc, ion_conc) {
+melt_temperature <- function(sequence, template_conc = 1e-06, ion_conc = 'Mg=2e-03') {
   melting_path <- "/Users/pedro_work/MELTING5.1.1/executable/melting"
+  sequence <- toupper(sequence)
   melting_command <- paste(melting_path, '-S', sequence, '-H dnadna', '-P',
                            template_conc, '-E', ion_conc)
+  #Running MELTING:
   out <- system(melting_command, intern = T)
-  
-  #Creting melting temperature dataframe:
-  melt_temp <- tibble(raw = out[5]) %>%
-    mutate(
-      primer = sequence,
-      tm = as.numeric(str_extract(raw, '\\d+\\.\\d+'))
-    ) %>%
-    select(-raw)
-  
-  melt_temp
+  #Extracting melting temperature value from command output:
+  melt_temp <- as.numeric(stringr::str_extract(out[5], '\\d+\\.\\d+'))
+  return(melt_temp)
 }
 
 #' Gather NUPACK's tools parameters.
@@ -80,8 +164,8 @@ nupack_args <- function(tool, input_sequence, melting_temperature,
   }
   
   #File prefix:
-  file_prefix <- gsub('.in$', '', temp)
-  
+  file_prefix <- tools::file_path_sans_ext(temp)
+
   #dangles:
   dangles_opt <- match.arg(dangles)
   
@@ -191,7 +275,7 @@ nupack_mfe <- function(input_sequence, melting_temperature,
   command <- paste(args$base_command, degenerate_opt, sep = " ")
   
   #Executing NUPACK command:
-  system(command, intern = T)
+  system(command)
   
   #Import output file 
   output_file <- paste(args$prefix, '.mfe', sep = '')
@@ -214,7 +298,7 @@ nupack_mfe <- function(input_sequence, melting_temperature,
     base_pairs = list(base_pairs)
   )
   
- 
+ return(mfe)
 }
 
 #' Calculate the partition function of a DNA complex using NUPACK's \code{pfunc}

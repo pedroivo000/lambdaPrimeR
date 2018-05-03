@@ -15,8 +15,8 @@ validate_primers <- function(object) {
   #Checking if required columns are present with the correct format:
   required_columns <- tribble(
     ~cols, ~req_class,
-    'forward_seq','character', 
-    'reverse_seq','character',
+    'forward_primer_seq','character', 
+    'reverse_primer_seq','character',
     'forward_length','integer', 
     'reverse_length','integer', 
     'target_region_origin','character', 
@@ -69,15 +69,26 @@ validate_primers <- function(object) {
 #' @export 
 setClass("Primers", contains = "data.frame", validity = validate_primers)
 
-Primers <- function(df, ...) new("Primers", ...)
+Primers <- function(df, ...) new("Primers", df, ...)
 
-# setGeneric("create_primers", function(template_list, ...) {
-#   standardGeneric("create_primers")
-# })
+setGeneric("get_sequences", function(object, ...) standardGeneric("get_sequences"))
 
-create_primers <- function(template_objects) {
+setMethod("get_sequences", 
+  signature = "Primers", 
+  function(object) {
+    df <- tribble(
+      ~orientation, ~primer_region, ~seq,
+      'forward', 'complete', object$forward_primer_seq, 
+      'forward', 'target', object$forward_target_anneal_seq,
+      'forward', 'vector', object$forward_vector_anneal_seq, 
+      'reverse', 'complete', object$reverse_primer_seq, 
+      'reverse', 'target', object$reverse_target_anneal_seq,
+      'reverse', 'vector', object$reverse_vector_anneal_seq
+    )
   
-}
+    return(df)  
+})
+
 #' Design primer pair from overlaps.
 #'
 #' This function uses the overlap information in the \code{overlaps} object
@@ -101,35 +112,3 @@ create_primers <- function(template_objects) {
 #' 
 #' @return A dataframe containing the forward and reverse primer sequences.
 #' @export
-create_primers <- function(template_list) {
-  primers <- overlaps %>%
-    #Add columns with overlap seqs:
-    spread(origin, seq) %>%
-    select(-type) %>%
-    mutate(
-      #We need to get the reverse complement of the right-oriented overlaps
-      #and merge the overlaps sequence to get the final primer seqs:
-      seq = case_when(
-        id == 'left' ~ paste(tolower(template), 
-                             target, 
-                             sep = ''),
-        id == 'right' ~ paste(tolower(reverse_complement(template)), 
-                              reverse_complement(target), 
-                              sep = ''
-        )
-      )
-    ) %>%
-    #changing id to primer orientation
-    mutate(id = case_when(
-      id == 'left' ~ gsub('left', 'forward', id),
-      id == 'right' ~ gsub('right', 'reverse', id)
-    )) %>%
-    mutate(type = 'primer') %>%
-    #extracting template and target annealing sequences
-    mutate(temp = str_replace(seq, '([[:upper:]])', ',\\1')) %>%
-    separate(temp, into = c('template_annealing_seq', 'target_annealing_seq'),
-             sep = ',') %>%
-    select(-target, -template)
-  
-}
-

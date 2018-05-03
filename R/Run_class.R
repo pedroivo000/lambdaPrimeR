@@ -40,8 +40,8 @@ Run <- function(target_object, vector_object, primer_object = NULL, id=NULL, ...
     #for the input templates. When we create a new Run object, we need to create
     #an empty Primer object to act as a place holder:
     empty_primer_df <- tibble(
-      forward_seq = character(),
-      reverse_seq = character(),
+      forward_primer_seq = character(),
+      reverse_primer_seq = character(),
       forward_length = integer(),  
       reverse_length = integer(),  
       target_region_origin = character(),  
@@ -77,3 +77,15 @@ read_inputs <-  function(target, vector, id = NULL, header_structure = NULL,
   #Creating a Run object from the Template inputs:
   Run <- Run(Target, Vector, id = id)
 }
+
+setGeneric("primers", function(x) standardGeneric("primers"))
+
+setMethod("primers", signature = "Run", function(x) x@primers)
+
+setGeneric("get_inputs", function(x) standardGeneric("get_inputs"))
+
+setMethod("get_inputs", signature = "Run", function(x) {
+  target <- x@target
+  vector <- x@vector
+  inputs <- list(target = target, vector = vector)
+}) 

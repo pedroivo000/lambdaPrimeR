@@ -4,16 +4,17 @@
 \alias{melt_temperature}
 \title{Calculate primer melting temperature.}
 \usage{
-melt_temperature(sequence, template_conc, ion_conc)
+melt_temperature(sequence, template_conc = 1e-06, ion_conc = "Mg=2e-03")
 }
 \arguments{
 \item{sequence}{A string corresponding to the primer sequence.}
 
-\item{template_conc}{A numeric value corresponding to the DNA template 
-concentration. Defauts to $10^-4$ M.}
+\item{template_conc}{A numeric value corresponding to the concentration of 
+the DNA molecule in excess. During PCR experiments, this value correspond to 
+the primer concentrations. Defauts to $10^-6$ M.}
 
-\item{ion_conc}{A string corresponding to the concentration of ion. See 
-MELTING documentation for details.}
+\item{ion_conc}{A string corresponding to the concentration of ion (see 
+MELTING documentation for details). Defaults to \code{Mg=2e-03}.}
 }
 \value{
 A dataframe containing the primer sequence and the calculated melting

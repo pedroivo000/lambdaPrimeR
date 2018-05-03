@@ -81,6 +81,56 @@ setMethod("get_annealing_regions",
           }
 )
 
+#' Create primers from target and vector DNA sequences.
+#'
+#' @param run_object 
+#'
+#' @return
+#' @export
+#'
+#' @examples
+create_primers <- function(run_object) {
+  #Extracting template slots from Run object:
+  Target <- run_object@target
+  Vector <- run_object@vector
+  # Primers <- run_object@primers
+  
+  #Extracting annealing region sequences from Target and Vector objects:
+  Target <- get_annealing_regions(Target, min_length = 15, max_length = 30)
+  Vector <- get_annealing_regions(Vector, position = 1500, 
+                                    min_length = 15, max_length = 30)
+  
+  target_left <- Target$target_anneal_left_seq
+  target_right <- Target$target_anneal_right_seq
+  vector_left <- Vector$vector_anneal_left_seq
+  vector_right <- Vector$vector_anneal_right_seq
+  
+  #Assembling primer sequences:
+  primers <- tibble(
+    forward_primer_seq = paste(tolower(vector_left), target_left, sep = ''),
+    reverse_primer_seq = paste(tolower(reverse_complement(vector_right)), 
+                        reverse_complement(target_right), sep = ''),
+    forward_target_anneal_seq = target_left,
+    forward_vector_anneal_seq = vector_left,
+    reverse_target_anneal_seq = reverse_complement(target_right),
+    reverse_vector_anneal_seq = reverse_complement(vector_right),
+    forward_length = nchar(forward_primer_seq),  
+    reverse_length = nchar(reverse_primer_seq),  
+    target_region_origin = Target$name,  
+    vector_region_origin = Vector$name
+  )
+  
+  #Creating Primers object:
+  Primers <- Primers(primers)
+  
+  #Updating Run object:
+  run_object@target <- Target
+  run_object@vector <- Vector
+  run_object@primers <- Primers
+  
+  return(run_object)
+}
+
 # add_overlaps <- function(overlap_df) {
 #   cols <- colnames(overlap_df)
 # }
@@ -169,7 +219,6 @@ get_overlaps <- function(sequence_inputs, position=NULL, length=NULL) {
 #'
 #' 
 #' @return A dataframe containing the forward and reverse primer sequences.
-#' @export
 create_primer_pair <- function(overlaps) {
   primers <- overlaps %>%
     #Add columns with overlap seqs:
