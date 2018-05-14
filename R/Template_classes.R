@@ -24,6 +24,7 @@ validate_template <- function(object) {
   #Checking if required columns are present with the correct format:
   required_columns <- tribble(
     ~cols, ~req_class,
+    'id', 'integer',
     'path','character', 
     'header','character',
     'name','character', 
@@ -80,92 +81,25 @@ validate_template <- function(object) {
 #'
 setClass("Template", contains = c("data.frame"))
 
-#'Read sequences from file.
-#'
-#'\code{read_sequences} reads a FASTA file into a dataframe, one sequence per
-#'row. This function also adds a \code{type} tag to each sequence, indicating if
-#'they are either a \code{target} gene or a \code{vector} sequence. Depending on
-#'the value of \code{type}, an instance of either the \code{Target} or 
-#'\code{Vector} class will be created. User can optionally select what part of 
-#'the sequence header will be used as the sequence \code{name}.
-#'
-#'@param file A path to a FASTA file, a vector containing the file path or a
-#'  string containing the sequence with header.
-#'@param input_type A string used to indicate if the sequence is a 'target' or a
-#'  'template'.
-#'@param header_structure A character vector corresponding to the structure of 
-#'sequence header line. Each vector element should correspond to a field in the 
-#'header line, delimitated by \code{sep}.
-#'@param name_field A string inticating what field of the header string should 
-#'be used as the sequence \code{name}.
-#'@param sep A single character or regex used to separate fields in the sequence
-#'  header according to the elements of \code{header_structure}. Defaults to '\\|'.
-#'
-#'@return A dataframe.
-#'@export
-#'
-#' @examples
-#' header <- c("name", "id", "extra_info")
-#' read_sequences("data/test.fasta", input_type = 'target')
-#' read_sequences("data/test.fasta", input_type = 'vector', header_structure = header, separator = '-')
-read_sequences <- function(file, input_type = c('target', 'vector'),
-                           header_structure = NULL, sep = NULL, 
-                           name_field = NULL) {
-  
-  #Checking input type:
-  if(is.null(input_type)) {
-    stop("Input type is required.")
-  }
-  type <- match.arg(input_type)
-  
-  #Reading fasta file into a column:
-  raw <- tibble(text = read_file(file))
-  
-  #Converting the raw text column into the correct format:
-  df <- raw %>%
-    separate_rows(text, sep = '\n>') %>%
-    separate(text, into = c('header', 'seq'), sep = '\n', extra = 'merge') %>%
-    mutate(
-      path = file, 
-      type = input_type,
-      seq = stringr::str_replace_all(seq, '\n', ''),
-      header = stringr::str_replace(header, '>', ''),
-      length = nchar(seq)
-    )
-  
-  #Checking if optional parameters to parse the header string were passed:
-  if(is.null(header_structure)) {
-    header_structure <- 'name'
-  }
-  if(is.null(sep)) {
-    sep <- '\\|'
-  }
-  if(is.null(name_field)) {
-    name_field <- 'name'
-  }
-  
-  #Spliting header string:
-  df <- df %>%
-    separate(header, into = header_structure, remove = F, extra = 'drop', sep = sep) 
-  
-  #Renaming name_field column to "name": 
-  colnames(df)[colnames(df)==name_field] <- "name"
-  
-  #Removing extra columns in df:
-  df <- df %>%
-    select(name, path, type, header, seq, length)
-  
-  #Checking what type of input was provided and creating appropriate class obj.:
-  object <- switch (input_type,
-    'target' = Target(df),
-    'vector' = Vector(df)
-  )
-
-  return(object)
-}
-
+#' S4 class representing a target gene sequence. 
+#' 
+#' The class \code{Target} is a subclass of \code{Template}. It represents the 
+#' sequence of a target gene to be inserted in a vector using Lambda-PCR. 
+#' 
+#' @return The \code{Target} constructor returns an object of class \code{Target},
+#' a subclass of \code{Template}.
+#' @export
 setClass("Target", contains = c("Template"), validity = validate_template)
 Target <- function(df, ...) new("Target", df, ...)
 
+#' S4 class representing a vector sequence. 
+#' 
+#' The class \code{Vector} is a subclass of \code{Template}. It represents the 
+#' sequence of a destination vector that the target gene will be inserted into
+#' using Lambda-PCR. 
+#' 
+#' @return The \code{Vector} constructor returns an object of class \code{Vector},
+#' a subclass of \code{Template}.
+#' @export
 setClass("Vector", contains = c("Template"), validity = validate_template)
 Vector <- function(df, ...) new("Vector", df, ...)

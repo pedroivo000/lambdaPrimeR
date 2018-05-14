@@ -15,70 +15,152 @@
 #'
 #' @examples
 setGeneric("get_annealing_regions", 
- function(template, position = NULL, min_length = NULL, max_length = NULL, ...) {
+ function(template, position = NULL, min_length = 15, max_length = 30, 
+          multiple = TRUE, ...) {
    standardGeneric("get_annealing_regions")
 })
 
 setMethod("get_annealing_regions", 
   signature = "Target",
-  function(template, min_length = NULL, max_length = NULL) {
-    #Using minimum allowed length as the length of the annealing region; 
-    #otherwise use the default of 15 bp.
-    length <- ifelse(is.null(min_length), 15, min_length)
+  function(template, min_length = 15, max_length = 30, mutiple = TRUE) {
+    
+    #Coercing Target object to S3 data frame:
+    targets <- asS3(template)
+    
+    #Expanding target data frame with annealing region lengths:
+    targets <- targets %>%
+      mutate(target_annealing_length = list(min_length:max_length)) %>%
+      unnest()
     
     #Saving sequence slot from template class in a variable:
     seq <- template$seq
     seq_length <- template$length
     
+    #Extracting the annealing regions for each length value:
     #When extracting the annealing regions from the target sequence, we need to 
     #get the 5' and 3' ends of the gene sequence:
     #Extracting overlaps
-    target_annealing_left <- substr(seq, 1, length)
-    target_annealing_right <- substr(seq, (seq_length-length), seq_length)
+    targets <- targets %>%
+      group_by(target_annealing_length) %>%
+      mutate(
+        target_anneal_left_seq  = substr(seq, 1, target_annealing_length),
+        target_anneal_right_seq = substr(seq, length-target_annealing_length, length),
+        target_anneal_left_beg = 1,
+        target_anneal_left_end = target_annealing_length,
+        target_anneal_right_beg = length - target_annealing_length,
+        target_anneal_right_end = length 
+      )
     
-    #Adding annealing region info to target object:
-    template$target_anneal_min_length <- min_length
-    template$target_anneal_max_length <- max_length
-    template$target_anneal_left_beg <- 1
-    template$target_anneal_left_end <- length
-    template$target_anneal_right_beg <- seq_length - length
-    template$target_anneal_right_end <- seq_length
-    template$target_anneal_left_seq <- target_annealing_left
-    template$target_anneal_right_seq <- target_annealing_right
-
-    return(template)
+    #Creating target object:
+    target_object <- Target(targets)
+    return(target_object)
   }
 )
 
 setMethod("get_annealing_regions", 
           signature = "Vector",
-          function(template, position = NULL, min_length = NULL, max_length = NULL) {
-            #Using minimum allowed length as the length of the annealing region; 
-            #otherwise use the default of 15 bp.
-            length <- ifelse(is.null(min_length), 15, min_length)
+          function(template, position = NULL, min_length = 15, max_length = 30,
+                   multi = TRUE) {
+            #Coercing Target object to S3 data frame:
+            vector <- asS3(template)
             
-            #Saving sequence slot from template class in a variable:
-            seq <- template$seq
-            seq_length <- template$length
-            
-            #When extracting the annealing regions from the target sequence, we need to 
+            #Expanding vector data frame with annealing region lengths:
+            vector <- vector %>%
+              mutate(vector_annealing_length = list(min_length:max_length)) %>%
+              unnest()
+
+            #Extracting the annealing regions for each length value:
+            #When extracting the annealing regions from the vector sequence, we need to 
             #get the 5' and 3' ends of the gene sequence:
             #Extracting overlaps
-            vector_annealing_left <- substr(seq, (position-length), position)
-            vector_annealing_right <- substr(seq, (position+1), (position+length+1))
+            vector <- vector %>%
+              group_by(vector_annealing_length) %>%
+              mutate(
+                vector_anneal_left_seq = substr(seq, position-vector_annealing_length, position),
+                vector_anneal_right_seq = substr(seq, (position+1), (position+vector_annealing_length+1)),
+                vector_anneal_left_beg = position - vector_annealing_length,
+                vector_anneal_left_end = position,
+                vector_anneal_right_beg = position + 1,
+                vector_anneal_right_end = position + vector_annealing_length + 1
+              )
             
-            #Adding annealing region info to target object:
-            template$vector_anneal_min_length <- min_length
-            template$vector_anneal_max_length <- max_length
-            template$vector_anneal_left_beg <- position - length
-            template$vector_anneal_left_end <- position
-            template$vector_anneal_right_beg <- position + 1
-            template$vector_anneal_right_end <- position + length + 1
-            template$vector_anneal_left_seq <- vector_annealing_left
-            template$vector_anneal_right_seq <- vector_annealing_right
-            
-            return(template)
+            #Creating target object:
+            vector_object <- Vector(vector)
+            return(vector_object)
           }
+)
+
+setMethod("get_annealing_regions", 
+  signature = "Run", 
+  function(template, position = NULL, min_length = NULL, max_length = NULL) {
+    #Extracting slots:
+    Target <- template@target
+    Vector <- template@vector
+    Primers <- template@primers
+    
+    #If a primer object was created from a .csv file with the primer sequences, 
+    #we need to update the Target and Vector objects with the coordinantes of 
+    #primer annealing regions. Second, if the primer object constains multiple
+    #primers, we need to match each primer with its respective target and vector
+    #names:
+    
+    #Coercing Target, Vector and Primer objects to S3 data frame
+    targets <- asS3(Target) %>%
+      rename(target_region_origin = name) %>%
+      select(-id)
+    vector <- asS3(Vector) %>%
+      select(name, seq) %>%
+      rename(
+        vector_region_origin = name, 
+        vector_seq = seq
+      ) 
+    primers <- asS3(Primers)
+    
+    #Locating primer annealing region in the Target and Vector sequences:
+    annealing_regions <- left_join(primers, vector) %>%
+      left_join(targets) %>%
+      group_by(id) %>%
+      do(
+        forward_target_anneal = as.tibble(str_locate(.$seq, toupper(.$forward_target_anneal_seq))),
+        reverse_target_anneal = as.tibble(str_locate(.$seq, reverse_complement(.$reverse_target_anneal_seq))),
+        forward_vector_anneal = as.tibble(str_locate(.$vector_seq, toupper(.$forward_vector_anneal_seq))),
+        reverse_vector_anneal = as.tibble(str_locate(.$vector_seq, reverse_complement(toupper(.$reverse_vector_anneal_seq))))
+      ) %>%
+      unnest(.sep = '_')
+    names(annealing_regions) <- gsub('start', 'beg', names(annealing_regions))
+    
+    #Merging coordinates to primer table:
+    primers <- primers %>%
+      left_join(annealing_regions)
+    
+    #Upadating Primer object:
+    Primers <- Primers(primers)
+    # return(Primers)
+    # #We also need to add the coordinates to the Target and Vector objects:
+    # Target$target_anneal_min_length <- nchar(primers$forward_target_anneal_seq)
+    # Target$target_anneal_max_length <- nchar(primers$forward_target_anneal_seq)
+    # Target$target_anneal_left_beg <- primers$forward_target_anneal_beg
+    # Target$target_anneal_left_end <- primers$forward_target_anneal_end
+    # Target$target_anneal_right_beg <- primers$reverse_target_anneal_beg
+    # Target$target_anneal_right_end <- primers$reverse_target_anneal_end
+    # Target$target_anneal_left_seq <- primers$forward_target_anneal_seq
+    # Target$target_anneal_right_seq <- reverse_complement(primers$reverse_target_anneal_seq)
+    # 
+    # #Adding annealing region info to vector object:
+    # Vector$vector_anneal_min_length <- nchar(primers$forward_vector_anneal_seq)
+    # Vector$vector_anneal_max_length <- nchar(primers$forward_vector_anneal_seq)
+    # Vector$vector_anneal_left_beg <- primers$forward_vector_anneal_beg
+    # Vector$vector_anneal_left_end <- primers$forward_vector_anneal_end
+    # Vector$vector_anneal_right_beg <- primers$reverse_vector_anneal_beg
+    # Vector$vector_anneal_right_end <- primers$reverse_vector_anneal_end
+    # Vector$vector_anneal_left_seq <- primers$forward_vector_anneal_seq
+    # Vector$vector_anneal_right_seq <- reverse_complement(primers$reverse_vector_anneal_seq)
+    # 
+    #Update Run object with annealing regions:
+    run_object <- Run(Target, Vector, Primers)
+    return(run_object)
+  }
+  
 )
 
 #' Create primers from target and vector DNA sequences.
@@ -110,6 +192,14 @@ create_primers <- function(run_object) {
     forward_primer_seq = paste(tolower(vector_left), target_left, sep = ''),
     reverse_primer_seq = paste(tolower(reverse_complement(vector_right)), 
                         reverse_complement(target_right), sep = ''),
+    forward_target_anneal_beg = Target$target_anneal_left_beg,
+    forward_target_anneal_end = Target$target_anneal_left_end,
+    forward_vector_anneal_beg = Vector$vector_anneal_left_beg,
+    forward_vector_anneal_end = Vector$vector_anneal_left_end,
+    reverse_target_anneal_beg = Target$target_anneal_right_beg,
+    reverse_target_anneal_end = Target$target_anneal_right_end,
+    reverse_vector_anneal_beg = Vector$vector_anneal_right_beg,
+    reverse_vector_anneal_end = Vector$vector_anneal_right_end,
     forward_target_anneal_seq = target_left,
     forward_vector_anneal_seq = vector_left,
     reverse_target_anneal_seq = reverse_complement(target_right),
@@ -118,7 +208,10 @@ create_primers <- function(run_object) {
     reverse_length = nchar(reverse_primer_seq),  
     target_region_origin = Target$name,  
     vector_region_origin = Vector$name
-  )
+  ) 
+  
+  primers <- primers %>%
+    mutate(id = row_number())
   
   #Creating Primers object:
   Primers <- Primers(primers)

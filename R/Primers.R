@@ -15,6 +15,7 @@ validate_primers <- function(object) {
   #Checking if required columns are present with the correct format:
   required_columns <- tribble(
     ~cols, ~req_class,
+    'id', 'integer',
     'forward_primer_seq','character', 
     'reverse_primer_seq','character',
     'forward_length','integer', 
@@ -76,6 +77,11 @@ setGeneric("get_sequences", function(object, ...) standardGeneric("get_sequences
 setMethod("get_sequences", 
   signature = "Primers", 
   function(object) {
+    # primer_seqs <- asS3(object)
+    # primer_seqs <- primer_seqs %>%
+    #   sperate()
+      
+    
     df <- tribble(
       ~orientation, ~primer_region, ~seq,
       'forward', 'complete', object$forward_primer_seq, 
@@ -88,27 +94,3 @@ setMethod("get_sequences",
   
     return(df)  
 })
-
-#' Design primer pair from overlaps.
-#'
-#' This function uses the overlap information in the \code{overlaps} object
-#' to design a primer pair by concatenating the overlap sequences in the
-#' correct order (see Details).
-#' 
-#' In order to design the primers for the first PCR step of LambdaPCR, where we
-#' add template-overlaping flanking regions to our target gene sequence, 
-#' we have to use the following rules:
-#'
-#' \itemize{
-#'   \item \strong{Forward primer:} left overlap + target left overlap, 
-#'   5'-3' orientation
-#'   \item \strong{Reverse primer:} complement of target right overlap + 
-#'   complement of template right overlap,  5'-3' orientation
-#' }
-#'
-#' @param overlaps A dataframe containing the overlap information for both input
-#' types. The \code{overlaps} object is created by \code{get_overlaps}.
-#'
-#' 
-#' @return A dataframe containing the forward and reverse primer sequences.
-#' @export

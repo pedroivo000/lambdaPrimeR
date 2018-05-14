@@ -11,11 +11,12 @@ RoxygenNote: 6.0.1
 Imports: shiny,
     tidyverse,
     stringr,
-    methods
+    methods,
+    tools
 Collate: 
-    'IO.R'
     'Primers.R'
     'Template_classes.R'
+    'IO.R'
     'Run_class.R'
     'pkg_imports.R'
     'primer_design.R'

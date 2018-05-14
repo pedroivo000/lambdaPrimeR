@@ -24,6 +24,173 @@ evaluate_primers <- function(run_object) {
   #Extracting primer object:
   primers <- run_object@primers
   #Get primer sequences:
+  # primer_sequences <- get_sequences(primers)
+  
+  #Extracting region of template sequence around the insertion position:
+  vector <- asS3(run_object@vector) %>%
+    ungroup() %>%
+    distinct(id, name, seq)
+  
+  vector_seqs <- primers %>%
+    select(id, vector_region_origin) %>%
+    group_by(id) %>%
+    mutate(
+      vector_seq = vector$seq[vector$name == vector_region_origin],
+      vector_seq = substr(vector_seq, 
+                          primers$forward_vector_anneal_beg - 29, 
+                          primers$reverse_vector_anneal_end + 30
+    ))
+  
+  primers <- left_join(primers, vector_seqs)
+  
+  #Evaluating each primer pair:
+  primer_eval <- primers %>%
+    group_by(id) %>%
+    do(result = evaluate_primer_pair(.)) %>%
+    unnest()
+  
+  # #Calculating melting temperatures:
+  # tmd_values <- primers %>%
+  #   select(id, contains('seq')) %>%
+  #   gather(seqtype, seq, -id) %>%
+  #   mutate(seq = toupper(seq)) %>%
+  #   group_by(id, seqtype) %>%
+  #   mutate(tm = melt_temperature(sequence = seq))
+  # 
+  # #Annealing temperature:
+  # tmd_values <- tmd_values %>%
+  #   separate(seqtype, into = c('orientation', 'primer_region'), 
+  #            sep = '_', extra ='merge') %>%
+  #   group_by(id, orientation, primer_region) %>%
+  #   mutate(ta = min(tm) + 3)
+  # 
+  # # tmd_values <- primer_sequences %>%
+  # #   mutate(seq = toupper(seq)) %>%
+  # #   group_by(orientation, primer_region) %>%
+  # #   mutate(tm = melt_temperature(seq))
+  # # 
+  # # #Annealing temparature
+  # # tmd_values <- tmd_values %>%
+  # #   group_by(primer_region) %>%
+  # #   mutate(ta = min(tm) + 3)
+  # 
+  # ta_vector <- unique(tmd_values$ta[tmd_values$primer_region=='vector_anneal_seq'])
+  # 
+  # #NUPACK calculations of complete sequences:
+  # seqs <- primer_sequences %>%
+  #   filter(primer_region == 'complete') %>%
+  #   pull(seq)
+  # names(seqs) <- c('fw', 'rv')
+  # 
+  # #Self-dimer formation free energy:
+  # dimers <- tribble(
+  #   ~primer, ~complex, ~complex_type, ~ta, ~dG,
+  #   'forward', 'foward', 'sdimer', ta_vector, nupack_pfunc(c(seqs['fw'], seqs['fw']), ta_vector),
+  #   'reverse', 'reverse', 'sdimer', ta_vector, nupack_pfunc(c(seqs['rv'], seqs['rv']), ta_vector),
+  #   'forward', 'reverse', 'hdimer', ta_vector, nupack_pfunc(c(seqs['fw'], seqs['rv']), ta_vector),
+  #   'reverse', 'forward', 'hdimer', ta_vector, nupack_pfunc(c(seqs['rv'], seqs['fw']), ta_vector)
+  # ) %>%
+  #   unnest() %>%
+  #   select(-partition_func)
+  # 
+  # #MFE of individual primers
+  # mfe <- tribble(
+  #   ~primer, ~complex, ~complex_type, ~ta, ~mfe,
+  #   'forward', 'forward', 'hp', ta_vector, nupack_mfe(seqs['fw'], ta_vector),
+  #   'reverse', 'reverse', 'hp', ta_vector, nupack_mfe(seqs['rv'], ta_vector)
+  # ) %>%
+  #   unnest() %>%
+  #   select(-structure, -base_pairs)
+  # 
+  # #Primer-template complex free energy:
+  # primer_template <- tribble(
+  #   ~primer, ~complex, ~complex_type, ~ta, ~dG,
+  #   'forward', 'temp', 'ptemp', ta_vector, nupack_pfunc(c(seqs['fw'], vector_seq), ta_vector),
+  #   'reverse', 'temp', 'ptemp', ta_vector, nupack_pfunc(c(seqs['rv'], vector_seq), ta_vector)
+  # ) %>%
+  #   unnest() %>%
+  #   select(-partition_func)
+  # 
+  # #Creating output;
+  # results <- bind_rows(dimers, mfe, primer_template) %>%
+  #   select(-complex) %>%
+  #   spread(complex_type, dG) %>%
+  #   mutate_at(vars(hdimer, hp, ptemp, sdimer), funs(as.numeric(.))) %>%
+  #   mutate(z = ptemp - (sdimer + hdimer + hp))
+  
+  return(primer_eval)
+}
+
+evaluate_primer_pair <- function(primer_df) {
+
+  vector_seq <- primer_df$vector_seq
+  
+  #Calculating melting temperatures:
+  tmd_values <- primer_df %>%
+    select(contains('seq'), -vector_seq) %>%
+    gather(seqtype, seq) %>%
+    mutate(seq = toupper(seq)) %>%
+    filter(!grepl('primer_seq', seqtype)) %>%
+    group_by(seqtype) %>%
+    mutate(tm = melt_temperature(sequence = seq))
+  
+  #Annealing temperature:
+  tmd_values <- tmd_values %>%
+    separate(seqtype, into = c('orientation', 'primer_region'), 
+             sep = '_', extra ='merge') %>%
+    group_by(primer_region) %>%
+    mutate(ta = min(tm) + 3)
+  
+  ta_vector <- unique(tmd_values$ta[tmd_values$primer_region=='vector_anneal_seq'])
+  
+  #NUPACK calculations of complete sequences:
+  fw <- primer_df$forward_primer_seq
+  rv <- primer_df$reverse_primer_seq
+  
+  #Self-dimer formation free energy:
+  dimers <- tribble(
+    ~primer, ~complex, ~complex_type, ~ta, ~dG,
+    'forward', 'foward', 'sdimer', ta_vector, nupack_pfunc(c(fw, fw), ta_vector),
+    'reverse', 'reverse', 'sdimer', ta_vector, nupack_pfunc(c(rv, rv), ta_vector),
+    'forward', 'reverse', 'hdimer', ta_vector, nupack_pfunc(c(fw, rv), ta_vector),
+    'reverse', 'forward', 'hdimer', ta_vector, nupack_pfunc(c(rv, fw), ta_vector)
+  ) %>%
+    unnest() %>%
+    select(-partition_func)
+  # return(dimers)
+  
+  #MFE of individual primers
+  mfe <- tribble(
+    ~primer, ~complex, ~complex_type, ~ta, ~mfe,
+    'forward', 'forward', 'hp', ta_vector, nupack_mfe(fw, ta_vector),
+    'reverse', 'reverse', 'hp', ta_vector, nupack_mfe(rv, ta_vector)
+  ) %>%
+    unnest() %>%
+    select(-structure, -base_pairs)
+  
+  #Primer-template complex free energy:
+  primer_template <- tribble(
+    ~primer, ~complex, ~complex_type, ~ta, ~dG,
+    'forward', 'temp', 'ptemp', ta_vector, nupack_pfunc(c(fw, vector_seq), ta_vector),
+    'reverse', 'temp', 'ptemp', ta_vector, nupack_pfunc(c(rv, vector_seq), ta_vector)
+  ) %>%
+    unnest() %>%
+    select(-partition_func)
+  
+  #Creating output;
+  results <- bind_rows(dimers, mfe, primer_template) %>%
+    select(-complex) %>%
+    spread(complex_type, dG) %>%
+    mutate_at(vars(hdimer, hp, ptemp, sdimer), funs(as.numeric(.))) %>%
+    mutate(z = ptemp - (sdimer + hdimer + hp))
+  
+  return(results)
+}
+
+evaluate_primers_noclass <- function(primers_df) {
+  #Extracting primer object:
+  primers <- run_object@primers
+  #Get primer sequences:
   primer_sequences <- get_sequences(primers)
   
   #Extracting region of template sequence around the insertion position:
@@ -112,7 +279,8 @@ melt_temperature <- function(sequence, template_conc = 1e-06, ion_conc = 'Mg=2e-
   #Running MELTING:
   out <- system(melting_command, intern = T)
   #Extracting melting temperature value from command output:
-  melt_temp <- as.numeric(stringr::str_extract(out[5], '\\d+\\.\\d+'))
+  melt_temp <- as.numeric(stringr::str_extract(out[5], '\\d+\\.*\\d*'))
+  
   return(melt_temp)
 }
 
