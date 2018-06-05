@@ -16,7 +16,7 @@
 #' @examples
 setGeneric("get_annealing_regions", 
  function(template, position = NULL, min_length = 15, max_length = 30, 
-          multiple = TRUE, ...) {
+          deletion_length = 0, multiple = TRUE, ...) {
    standardGeneric("get_annealing_regions")
 })
 
@@ -60,7 +60,7 @@ setMethod("get_annealing_regions",
 setMethod("get_annealing_regions", 
           signature = "Vector",
           function(template, position = NULL, min_length = 15, max_length = 30,
-                   multi = TRUE) {
+                   deletion_length = 0, multi = TRUE) {
             #Coercing Target object to S3 data frame:
             vector <- asS3(template)
             
@@ -77,7 +77,7 @@ setMethod("get_annealing_regions",
               group_by(vector_annealing_length) %>%
               mutate(
                 vector_anneal_left_seq = substr(seq, position-vector_annealing_length, position),
-                vector_anneal_right_seq = substr(seq, (position+1), (position+vector_annealing_length+1)),
+                vector_anneal_right_seq = substr(seq, (position+deletion_length+1), (position+deletion_length+vector_annealing_length+1)),
                 vector_anneal_left_beg = position - vector_annealing_length,
                 vector_anneal_left_end = position,
                 vector_anneal_right_beg = position + 1,
@@ -171,7 +171,8 @@ setMethod("get_annealing_regions",
 #' @export
 #'
 #' @examples
-create_primers <- function(run_object) {
+create_primers <- function(run_object, min_legnth = 15, max_length = 30,
+                           position = NULL, deletion_length = 0) {
   #Extracting template slots from Run object:
   Target <- run_object@target
   Vector <- run_object@vector
@@ -179,7 +180,7 @@ create_primers <- function(run_object) {
   
   #Extracting annealing region sequences from Target and Vector objects:
   Target <- get_annealing_regions(Target, min_length = 15, max_length = 30)
-  Vector <- get_annealing_regions(Vector, position = 1500, 
+  Vector <- get_annealing_regions(Vector, position = position, deletion_length = 0, 
                                     min_length = 15, max_length = 30)
   
   target_left <- Target$target_anneal_left_seq

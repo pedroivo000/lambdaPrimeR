@@ -124,23 +124,57 @@ Adding coordinates to `imen_primers`:
 imen_primers <- left_join(imen_primers, target_anneal_coord)
 ```
 
-## 05/08/18
+## 06/01/18
 
-### Comparing 
+### Redesigning Imen's primers
 
-Lets import the target, vector and primer sequences from Imen's data:
 ```{r}
-imen_target_input <- system.file('extdata', 'imen_primer_targets.csv', package="lambdaPrimeR")
+insertion_positions %>%
+  group_by(target_name) %>%
+  mutate(deletion_length = start[orientation == 'reverse'] - end[orientation == 'forward']-1)
+```
+
+```{r}
+imen_target_input <- system.file('extdata', 'imen_primer_targets.csv', package = "lambdaPrimeR")
 imen_vector_input <- system.file('extdata', 'pUC19_imen.fasta', package = "lambdaPrimeR")
-imen_primer_csv <- system.file('extdata', 'imen_primers_toeval.csv', package = "lambdaPrimeR")
-inputs_imen <- read_inputs(imen_target_input, imen_vector_input, primer_csv)
-```
 
-We can also design primers to insert the same target genes at the same position 
-in the pUC19 plasmid:
+input_pairs <- pimers_table %>%
+  select(target_name, vector_name) %>%
+  rename(
+    target = target_name, 
+    vector = vector_name
+  )
+
+imen_designs <- read_inputs(imen_target_input, 
+                            imen_vector_input, 
+                            target_vector_pairs = input_pairs)
+```
 
 ```{r}
-test_inputs <- read_inputs(imen_target_input, imen_vector_input)
-test_inputs <- create_primers(test_inputs)
+imen_designs <- lapply(imen_designs, function(x)create_primers(x, position = 377, deletion_length = 57))
+scores <- lapply(imen_designs, function(x) evaluate_primers(x))
+scores <- bind_rows(scores, .id = 'run_id')
 ```
+
+```{r}
+lambdprimer_scores <- scores %>%
+  select(-id, -run_id) %>%
+  mutate(origin = 'lpr')
+
+imen_scores <- primer_scores_imen %>%
+  select(-id) %>%
+  mutate(origin = 'imen')
+
+score_comparison <- bind_rows(lambdprimer_scores, imen_scores) %>%
+  group_by(primer) %>%
+  do(
+    ttest = t.test(.$z[.$origin == 'imen'], .$z[.$origin == 'lpr'])
+  ) 
+
+score_avg <- bind_rows(lambdprimer_scores, imen_scores) %>%
+  group_by(primer, origin) %>%
+  summarise(z_sd = sd(z), z = mean(z)) 
+```
+
+
 
