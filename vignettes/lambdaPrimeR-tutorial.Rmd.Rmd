@@ -1,0 +1,100 @@
+---
+title: "`lambdaPrimeR` tutorial"
+author: "Pedro Ivo Guimarães"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{`lambdaPrimeR` tutorial}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+
+# library(lambdaPrimeR)
+devtools::load_all()
+```
+
+# Introduction 
+
+## External dependencies
+
+The `lambdaPrimeR`tool has two external dependencies that need to be installed and 
+added to your systemś path before using the `lambdaPrimeR` tool
+
+- [MELTING (>= v5.0)](https://www.ebi.ac.uk/biomodels-static/tools/melting/): used for the calculation of melting temperature of DNA sequences
+- [NUPACK (>= v3.1)](http://www.nupack.org/downloads): used to perform the free energy calculations of primer-vector
+and primer-primer complexes.
+
+NUPACK needs to be compiled from the source code using `cmake`. To download and 
+install `cmake`, please follow the instructions [here](https://cmake.org/install/).
+
+# Using the `lambdaPrimeR` package
+
+The `lambdaPrimeR` primer design process is very simple, and only requires three
+main functions: `read_inputs()`, `create_primers()`, and `evaluate_primers()`.
+After the primers are designed, the `report_primers()` function exports the 
+best primer pairs into a .csv file. In ordert to better understand how the 
+primer design process works, we will breakdown the necessary steps one by one
+on the next sections. 
+
+## Loading data 
+
+In order to design the primers, we will need only three main inputs: the target 
+gene sequences, the destination vector sequence and the poisition that you 
+want to insert the target gene into the vector. The target and vector sequences
+can be imported from FASTA and CSV files, you simply need to provide the filepath
+to the `read_inputs()`. 
+
+Let's import two example files to demostrate how to use the `read_inputs()` function. 
+The two example files, `GFP sequences.fasta` and `pUC19.fasta` are provided with
+the `lambdaPrimeR` tool:
+
+```{r}
+#Specify target and vector input files paths:
+target_input_example <- system.file('extdata', 'GFP sequence.fasta', package = "lambdaPrimeR")
+vector_input_example <- system.file('extdata', 'pUC19.fasta', package = "lambdaPrimeR")
+
+#Reading templates using the read_inputs() function:
+inputs <- read_inputs(target = target_input_example, vector = vector_input_example)
+```
+
+The `read_inputs()` function imports the FASTA files and stores the input information
+(name, sequence, length, ect) in a `Run` object. The `Run` object is an S4 class
+that represents a $\lambda$-PCR reaction, therefore it holds all the information 
+necessary to create the primer pairs. The `Run` object contains the following 
+slots:
+
+- `Target`: a data frame with the target input information
+- `Vector`: a data frame with the vector input information 
+- `Primers`: an empty data frame that will store the designed primer pairs and 
+relevant thermodynamic data (annealing temp, complex free energies, etc)
+- `id`: an unique identifier for the current primer design event. This can be 
+provided by you or generated automatically from the input target and vector names 
+(default).
+
+The other main functions of the `lambdaPrimeR` package interact with the `Run`
+objected created by the `read_inputs()` function. 
+
+## Creating primers 
+
+Now that we have our inputs in a `Run` object (the `inputs` object), we can use
+the `create_primers()` function to design the primer pairs. There are two main
+inputs for the `create_primers()` function:
+
+- The `Run` objects containing the input data
+- The `insertion_position` coordinates where the target gene needs to be inserted
+in the destination vector. 
+
+The `create_primers()` function will create primers that have a target-complementary 
+region and a vector-complementary region.
+
+```{r create-primer-demo}
+inputs <- create_primers(inputs, position = 1500)
+```
+
+

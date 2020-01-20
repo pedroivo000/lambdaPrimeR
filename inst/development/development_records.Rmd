@@ -2,19 +2,24 @@
 title: "Development records notebook"
 author: "Pedro Ivo Guimarães"
 description: LambdaPCR development archiving notebook
-output: html_notebook
+output: 
+  html_notebook:
+    toc: yes
 ---
 
-# February 
+# Packages and global options
 
-## Packages and global options
-
-```{r packages}
+```{r packages, message=FALSE, warning=FALSE}
 library(tidyverse)
-# library(Biostrings)
-library(devtools)
 library(stringr)
+library(ggforce)
+library(cowplot)
+library(RcppRoll)
+source("~/proposal_prelimn/code/libraries_and_global_opts.R")
+devtools::load_all(pkg = "~/lambdaPrimeR/")
 ```
+
+# February 
 
 ## 02-26-18
 
@@ -36,8 +41,8 @@ read_sequence <- function(file, ...) {
     )
 }
 
-template <- read_sequence("../data/puc19.fasta")
-target <- read_sequence("../data/GFP sequence.fasta")
+template <- read_sequence("../extdata/puc19.fasta")
+target <- read_sequence("../extdata/GFP sequence.fasta")
 ```
 
 ## 02-28-18
@@ -72,9 +77,11 @@ read_sequence <- function(file, id_field = NULL, separator = NULL) {
     separate(header, into = id_field, extra = 'drop', sep = separator)
 }
 
-template <- read_sequence("../data/puc19.fasta")
-target <- read_sequence("../data/GFP sequence.fasta")
+template <- read_sequence("../extdata/puc19.fasta")
+target <- read_sequence("../extdata/GFP sequence.fasta")
 ```
+
+# March
 
 ## 03-01-18
 
@@ -109,8 +116,8 @@ read_sequence <- function(file, input_type, id_field = NULL, separator = NULL) {
     separate(header, into = id_field, remove = F, extra = 'drop', sep = separator)
 }
 
-template <- read_sequence("../data/puc19.fasta", input_type = 'template')
-target <- read_sequence("../data/GFP sequence.fasta", input_type = 'target')
+template <- read_sequence("../extdata/puc19.fasta", input_type = 'template')
+target <- read_sequence("../extdata/GFP sequence.fasta", input_type = 'target')
 ```
 
 ### Design primers for gene insertion
@@ -221,8 +228,1383 @@ create_primers <- function(overlaps_target, overlaps_template) {
 }
 
 primers <- create_primers(overlaps_target, overlaps_template)
+```
+
+## 03/08/18
+
+### `lambdaPrimer` flowchart
+
+```{r diagrammer-test}
+library(DiagrammeR)
+
+grViz("
+  digraph lambdaPrimeR_dataflow {
+    rankdir='LR';
+    # splines='ortho';
+    #internal object nodes:
+    node [shape = circle]
+    input; overlaps; primers; score
+    
+    #Input and output nodes 
+    node [shape = box]
+    target; template; ins_position; report
+
+    #Function nodes:
+    node [shape = plaintext]
+    read_sequences; get_overlaps; create_primer; melt_temp;
+    hairpin_prob; primer_score; rank_primers; mutate_primer;
+    report_best_primers
+    
+    #Edges:
+    target -> read_sequences; template -> read_sequences; 
+    read_sequences -> input; input -> get_overlaps;
+    ins_position -> get_overlaps; get_overlaps -> overlaps; 
+    overlaps -> create_primer; create_primer -> primers;
+    primers -> report_best_primers; report_best_primers -> report
+    
+    subgraph cluster_ga {
+      primers -> melt_temp; primers -> hairpin_prob;
+      hairpin_prob -> primer_score; melt_temp -> primer_score;
+      primer_score -> score; score -> rank_primers; 
+      rank_primers -> mutate_primer; mutate_primer -> primers;
+      label = 'Genetic algorithm'
+    }
+    
+  }
+")
 
 ```
 
+## 03/09/2018
+
+### Melting temperature calculation with MELTING tool
+
+Today I am learning how to use the [MELTING](https://www.ebi.ac.uk/biomodels/tools/melting/) tool to calculate the melting temperature of primers. Accoring to the documenation, the following options are mandatory:
+
+```
+Mandatory options :
+
+-S [sequence]
+	Nucleic acid sequence, mandatory. The sens of this sequence must be 5'-3'.
+
+
+-C [complementary sequence]
+	Nucleic acid complementary sequence, mandatory only if there is inosine bases 
+	or azobenznes in the sequence entered with the opton -S. The sens of this 
+	sequence must be 3'-5''.
+
+-E [agent1=concentration1:agent2=concentration2]
+	Different agent concentrations in the solution. The agents can be cations 
+	(Na, K, Tris, Mg for Na+, K+, Tris+ and Mg2+), dNTP or other agents 
+	(DMSO, formamide). The concentrations must be in Mol/L but there are some 
+	exceptions : DMSO is a percentage, formamide is a percentage if the method 
+	lincorr is chosen and in Mol/L if the method bla96 is chosen. At least one 
+	cation concentration is mandatory, the other agents are optional. See the 
+	documentation for the concentration limits. It depends on the used correction.
+
+-P [nucleotide concentration]
+	Concentration in mol/L of the nucleic acid strand in excess, mandatory.
+
+-H [hybridization]
+	Type of hybridization, mandatory. Four types of hybridization are allowed: 
+	dnadna (DNA duplex), rnarna (RNA duplex), dnarna or rnadna (hybrid DNA/RNA) 
+	and mrnarna or rnamrna (2-o-methyl RNA/ RNA). The type of hybridization 
+	defines the kind of the sequence and its complementary. 
+		Ex : dnarna = the sequence (entered with the option -S) is a DNA sequence 
+		and its complementary (entered with the option -C) is a RNA sequence.
+		Ex : rnadna = the sequence (entered with the option -S) is a RNA sequence 
+		and its complementary (entered with the option -C) is a DNA sequence  
+```
+
+We can use the following command to calculate the melting temperature of a
+DNA-DNA hybridization:
+
+```{bash}
+/Users/pedro_work/MELTING5.1.1/executable/melting -S ATGGTGAGCAAGGGC -H dnadna 
+-P 1e-7 -E Mg=1
+```
+
+
+### Integrating MELTING and R
+
+To test the MELTING tool, I am going to use the `lambdaPrimeR` test primer 
+sequences. The test primers are designed using the GFP gene sequence as target
+and the pUC19 plasmid sequence as template. The insertion coordinate is 1500. 
+
+```{r create-test-primers}
+#Input sequences:
+target <- system.file('extdata', 'GFP sequence.fasta', package = 'lambdaPrimeR')
+template <- system.file('extdata', 'puc19.fasta', package = 'lambdaPrimeR')
+inputs <- read_sequences_noclass(target, input_type = 'target')
+inputs <- read_sequences_noclass(template, input_df = inputs, input_type = 'template')
+
+#get sequence overlaps:
+overlaps <- get_overlaps(inputs, 1500)
+primers <- create_primer_pair(overlaps)
+```
+
+```{r pimers-object}
+primers
+```
+
+Let's use the forward primer to test if we can use R to call MELTING to calculate
+the melting temperature fr the annealing reagions of the primer, and return the
+value back to R. The idea for this function came from [here](https://darrenjw.wordpress.com/2011/01/01/calling-java-code-from-r/).
+
+```{r fun-melt-temperature}
+primer <- toupper(primers$seq[primers$id == 'forward'])
+melt_temperature <- function(sequence, template_conc, ion_conc) {
+  melting_path <- "/Users/pedro_work/MELTING5.1.1/executable/melting"
+  melting_command <- paste(melting_path, '-S', sequence, '-H dnadna', '-P',
+                           template_conc, '-E', ion_conc)
+  system(melting_command, intern = T)
+}
+
+melt_temp_test <- melt_temperature(primer, 1e-07, 'Mg=1')
+```
+
+```{r melt-temp-output}
+melt_temp_test
+```
+
+## 03/10/18
+
+### Updating `melt_temperature` function to parse `melting` command output
+
+```{r fun-melt-temperature-update}
+melt_temperature <- function(sequence, template_conc, ion_conc) {
+  melting_path <- "/Users/pedro_work/MELTING5.1.1/executable/melting"
+  melting_command <- paste(melting_path, '-S', sequence, '-H dnadna', '-P',
+                           template_conc, '-E', ion_conc)
+  out <- system(melting_command, intern = T)
+  
+  #Creting melting temperature dataframe:
+  melt_temp <- tibble(raw = out[5]) %>%
+    mutate(
+      primer = sequence,
+      tm = as.numeric(str_extract(raw, '\\d+\\.\\d+'))
+    ) %>%
+    select(-raw)
+}
+
+melt_temp <- melt_temperature(primer, template_conc = 1e-7, ion_conc = 'Mg=1')
+```
+
+```{r melt-temp-output-update}
+melt_temp
+```
+
+## 03/14/18
+
+### Using NUPACK to calculate hairpin formation probability
+
+Today I am learning how to use NUPACK to calculate the probability of hairpin
+formation on the template-overlaping regions of the $\lambda$-PCR primers. The
+reason for this is that the formation of hairpins in the annealing regions of
+the mega-primer could cause the DNA polymerase to dettach from the DNA template,
+and NUPACk is capable of calculating the probability of a base being bound and
+unbound to any other base in the sequence.
+
+In order to test NUPACK, I'll use the sequence of the GFP gene with the 
+template-overlap flanking regions as the test input.
+
+```{r nupack_test_input, warning=FALSE, message=FALSE}
+test_file <- system.file("extdata", "nupack_test_seq.in",
+                          package = "lambdaPrimeR")
+
+test_seq <- read_file(test_file)
+
+test_seq
+nchar(test_seq)
+```
+
+The command to run NUPACK to calculate the pair formation probability of the
+input sequence is:
+
+```{bash nupack-command, eval=FALSE}
+cd /Users/pedro_work/lambdaPrimeR/inst/extdata
+time pairs -T 45 -material dna nupack_test_seq
+```
+```
+real	2m2.072s
+user	2m0.107s
+sys	0m1.582s
+```
+This command produced an output called `nupack_test_seq.ppairs`, that contains
+the calculation of the base pair formation probabilities:
+
+```{r nupack-output}
+nupack_output <- read_lines("../extdata/nupack_test_seq.ppairs")
+head(nupack_output, 25)
+```
+
+According to the NUPACK manual, the `nupack_test_seq.ppairs` contains the 
+probability of formation of each base pair in the secondary structure of the 
+input sequence: 
+
+```{r pairs-command-man-page, echo=FALSE}
+knitr::include_graphics(path = "./nupack_pairs_command_manual_page.pdf")
+```
+
+We can extract the probabilities that a base will be unpaired from
+`nupack_test_seq.ppairs` and store it in a dataframe:
+
+```{r base-pair-probabilities}
+unpaired_probabilities <- tibble(lines = nupack_output) %>%
+  filter(grepl('^\\d+\\t', lines)) %>%
+  separate(lines, into = c('ibase', 'jbase', 'p'), sep = '\t') %>%
+  mutate_all(as.numeric) %>%
+  filter(jbase == nchar(test_seq)+1)
+  
+unpaired_probabilities
+```
+
+The `p` column contains the probabilities of a base to be unbound at the
+the specified melting temperature (T~m~ = 45 ºC). We can use this column to plot
+the variation in probability throughout the target gene sequence:
+
+```{r prob-plot-target-gene}
+#Full sequenc
+zoom_left <- ggplot(unpaired_probabilities, 
+                    aes(x=ibase, y=p, color = ibase >= 40))+
+  geom_line(size = 0.5)+
+  geom_point(size = 1) + 
+  xlab('Base i')+
+  ylab('Prob. that base i is unpaired')+
+  theme_bw()+
+  facet_zoom(x = ibase <= 40, zoom.size = 1.5)+
+  scale_color_manual(values = greenfocus)+
+
+  theme(legend.position = "none")
+
+zoom_right <- ggplot(unpaired_probabilities, 
+                    aes(x=ibase, y=p, color = ibase <= nchar(test_seq) - 40))+
+  geom_line(size = 0.5)+
+  geom_point(size = 1) + 
+  xlab('Base i')+
+  ylab('Prob. that base i is unpaired')+
+  facet_zoom(x = ibase >= nchar(test_seq)-40, zoom.size = 1.5)+
+  theme_bw()+
+  scale_color_manual(values = greenfocus)+
+  theme(legend.position = "none")
+
+plot <- plot_grid(zoom_left, zoom_right, ncol = 2,  labels = 'auto')
+plot
+```
+
+## 03/15/18
+
+### Testing NUPACK with mega-primer fragments
+
+Let's check how the base-pairing probabilities calculated by NUPACK will change 
+if we use only the edges of the mega-primer sequence. The default overlap 
+lengths in the `lambdaPrimeR`-generated primes are 20bp template overlaps and 
+15 bp target gene overlap. So, for this first test, we'll use only the firts 
+40bp of each end of mega-primer sequence:
+
+```{r megaprimer-seq-edges-extract}
+#extracting edges:
+fiveprime_end_seq <- substr(test_seq, 1, 40)
+threeprime_end_seq <- substr(test_seq, (nchar(test_seq)-40), nchar(test_seq))
+
+#Writing NUPACK input files
+write_file(fiveprime_end_seq, 'notebook_data/gfp_puc19_frag_5p.in')
+write_file(threeprime_end_seq, 'notebook_data/gfp_puc19_frag_3p.in')
+```
+
+We can write a function that will pass the input files to NUPACK and retrieve
+the output:
+
+```{r run-nupack-function}
+run_nupack <- function(input_file, melting_temperature, paired=TRUE) {
+  #Extracting file prefix:
+  file_prefix <- gsub('.in$', '', input_file)
+  output_file_name <- gsub('.in$', '.ppairs', input_file)
+  
+  #Input sequence length:
+  input_seq <- read_file(input_file)
+  
+  #Running NUPACK with the input file
+  nupack_command <- paste('time', 'pairs', '-T', melting_temperature,
+                          '-material dna', file_prefix)
+  system(nupack_command, intern = T)
+  
+  #Import output file and extract base pair probabilities:
+  nupack_output <- read_lines(output_file_name)
+  # print(head(nupack_output, 20))
+  
+  unpaired_probabilities <- tibble(lines = nupack_output) %>%
+    filter(grepl('^\\d+\\t', lines)) %>%
+    separate(lines, into = c('ibase', 'jbase', 'p'), sep = '\t') %>%
+    mutate_all(as.numeric) 
+  
+  if(paired) {
+    unpaired_probabilities %>%
+      filter(jbase < nchar(input_seq)+1)
+  } else {
+    unpaired_probabilities %>%
+      filter(jbase == nchar(input_seq)+1)
+  }
+    
+}
+```
+
+```{r run-nupack-seq-fragments-test}
+seq_fragments <- dir(path = '~/lambdaPrimeR/inst/development/notebook_data/', 
+                     pattern = '*p.in', full.names = T)
+
+nupack_outputs <- tibble(input = seq_fragments) %>%
+  group_by(input) %>%
+  do(
+    nupack_output = run_nupack(.$input, 45, paired = F)
+  ) %>%
+  unnest() %>%
+  mutate(input = basename(input))
+```
+
+NUPACK runs much faster on smaller sequences (duh). We need to check if the base
+pair formation probability changed now that we used only the edges of the mega
+primer:
+
+```{r base-pair-prob-edges}
+unpaired_probabilities <- unpaired_probabilities %>%
+  ungroup() %>%
+  mutate(input = case_when(
+    ibase <= 40 ~ 'gfp_puc19_full_5p',
+    ibase >= (nchar(test_seq) - 40) ~ 'gfp_puc19_full_3p',
+    TRUE ~ NA_character_
+  )) %>%
+  filter(!is.na(input)) %>%
+  group_by(input) %>%
+  mutate(ibase = row_number())
+
+
+edge_vs_full_seq_prob <- bind_rows(nupack_outputs, unpaired_probabilities) %>%
+  mutate(input = gsub('.in', '', input)) %>%
+  separate(input, into = c('target', 'template', 'input_type', 'end'), sep = '_')
+
+plot <- ggplot(edge_vs_full_seq_prob, aes(x = ibase, y = p, color = input_type))
+plot+
+  facet_grid( ~ end, scales = 'free_x')+
+  geom_line()+
+  geom_point()+
+  xlab('Base i')+
+  ylab('Prob. of base i being unpaired')+
+  scale_color_manual(values = plot_pallets$tol2qualitative, name = "Input type",
+                     labels = c('Sequence edges', 'Full sequence'))
+  
+```
+
+It looks like **there are very changes on the base pair probabilities calculated 
+by NUPACK when just the edges of the mega primer are used as input**. This is a 
+very good result as it means that I don't need to use the mega primer entire 
+sequence for this step, reducing the running time significantly. 
+
+## 03/16/18
+
+### Function to break the mega-primer sequence into smaller fragments
+
+```{r seq-fragmentor}
+split_sequence <- function(input_sequence, fragment_length) {
+  string <- toupper(input_sequence)
+  pattern <- paste('(?<=.{', fragment_length, '})', sep = '')
+  fragments <- strsplit(input_sequence, pattern, perl=T)
+} 
+
+test <- split_sequence(test_seq, 5)
+test
+```
+
+### Continuing testing NUPACK with mega-primer fragments
+
+My hypothesis is that using just the mega primer edges improves the probability
+of a base to be unpaired because NUPACK cannot calculate the probability of two 
+distant bases pairing. We can check if this is the case by ploting the base pair
+coordinates and see if the NUPACK runs with just the edges does not contain
+pairs formed by two distant bases.
+
+```{r base-pair-coordinates-data, warning=FALSE, message=FALSE}
+full_seq_paired_bases <- tibble(lines = nupack_output) %>%
+  filter(grepl('^\\d+\\t', lines)) %>%
+  separate(lines, into = c('ibase', 'jbase', 'p'), sep = '\t') %>%
+  mutate_all(as.numeric) %>%
+  filter(jbase < nchar(test_seq)+1) %>%
+  mutate(input = case_when(
+    ibase <= 40 ~ 'gfp_puc19_full_5p',
+    ibase >= (nchar(test_seq) - 40) ~ 'gfp_puc19_full_3p',
+    TRUE ~ NA_character_
+  )) %>%
+  filter(!is.na(input))
+  
+
+fragments_paired_prob <- tibble(input = seq_fragments) %>%
+  group_by(input) %>%
+  do(
+    nupack_output = run_nupack(.$input, 45, paired = T)
+  ) %>%
+  unnest() %>%
+  mutate(
+    input = basename(input),
+    ibase = ifelse(input == 'gfp_puc19_frag_3p.in', 
+                   ibase + nchar(test_seq) - 41,
+                   ibase),
+    jbase = ifelse(input == 'gfp_puc19_frag_3p.in', 
+                   jbase + nchar(test_seq) - 41,
+                   jbase)
+  )
+
+edge_vs_full_base_pair_prob <- 
+  bind_rows(fragments_paired_prob, full_seq_paired_bases) %>%
+  mutate(input = gsub('.in', '', input)) %>%
+  separate(input, into = c('target', 'template', 'input_type', 'end'), sep = '_')
+```
+
+```{r base-pair-energy-plot, echo=FALSE}
+prob_plots <- edge_vs_full_base_pair_prob %>%
+  group_by(input_type) %>%
+  do(
+    plots = 
+      ggplot(., aes(x=ibase, y=jbase, color = p)) +
+      facet_wrap(~ input_type, scales = 'free') +
+      geom_point()+
+      facet_zoom(x=ibase<100)+
+      scale_color_gradientn(colors = rev(RColorBrewer::brewer.pal(11, "Spectral")))
+  )
+  
+plot_grid(plotlist = prob_plots$plots, ncol = 2, labels = 'auto')
+```
+
+```{r base-pair-prob-plot, echo=FALSE}
+prob_plots <- edge_vs_full_base_pair_prob %>%
+  group_by(end) %>%
+  do(
+    plots = 
+      ggplot(., aes(x=ibase, y=jbase, color = p, z=p))+
+      facet_grid( ~ input_type, scales = 'free')+
+      geom_point()+
+      scale_color_gradientn(colors = rev(RColorBrewer::brewer.pal(11, "Spectral")))
+  )
+  
+plot_grid(plotlist = prob_plots$plots, nrow = 2, labels = 'auto')
+
+  
+
+```
+
+We can see that most of the changes in the base pairing probability occurs at 
+the 5' end of the mega-primer sequence. By using only the first 40 bp of the
+left end, we don't take into consideration the probability of these bases to 
+bind to distant bases (200-400 bp distant), increasing our unpaired probability.
+
+### Calculating average hairpin formation probability of mega-primer edges
+
+I need to find a way to calculate the average hairpin formation probability of 
+the mega-primer edges and use that value as part of the primer score that will
+be used to rank the primers designed during the genetic algorith score. 
+
+One of the ideas I had is to calculate the average hairpin formation of the 
+entire edge. We can write a function to calculate the average probability
+in a rolling window, but we need to keep track of the index of the first base
+of the rolling window current's position. Let's start with a toy dataset to 
+figure out how to do it:
+
+```{r rolling-windon-test}
+df <- tibble(x = 1:10)
+df %>%
+  mutate(
+    right_align = roll_sumr(x, 2),
+    left_align = roll_suml(x, 2)
+  )
+
+```
+
+Depending on the alignment of the rolling sum window, the base at the end of 
+the window will be different:
+
+- Left-aligned: window starts at base $i$ and ends at base $i + l_{window} -1$
+- Right-aligned: window starts at base $i + l_{window} -1$, ends at base $i$
+
+
+We can write the rolling function using this information:
+```{r rolling-prob-avg-fun}
+window_size <- c(2, 3, 4, 5, 10, 20, 30)
+
+window_probabilities <- tibble(l = window_size) %>%
+  group_by(l) %>%
+  do(
+    cummprod = roll_prodr(unpaired_probabilities$p, n = .),
+    index = unpaired_probabilities$ibase,
+    input = unpaired_probabilities$input,
+    ibase = unpaired_probabilities$ibase
+  ) %>%
+  unnest()
+```
+
+## 03/17/18
+
+### Calculating MFE of primer edges
+
+During the meeting I had with Imen on 03/16/18, she suggested that I calculate 
+the probability of the primer binding the template and see if it is higher than 
+the probability of the primers binding to each other or higher than the 
+probability of hairpin formation. We can use NUPACk to calculate everything,
+
+The fist one I am going to calculate is the minimum free energy secondary 
+structure (MFE). The MFE is the secondary structure with the lowest free 
+energy possible predicted by NUPACK. We can use this free energy value to 
+estimate how stable the predicted primer secondary structure is and calculate
+the hairpin melting temperature. 
+
+#### Updating `run_nupack` function:
+
+Add a `exec` option to specify what NUPACK tool to run. Most NUPACK tools have
+the same parameters:
+
+```
+pfunc [-T temperature] [-multi] [-pseudo] [-material parameters] [-dangles treatment] prefix
+
+pairs [-T temperature] [-multi] [-pseudo] [-material parameters] [-dangles treatment] [-cutoff cutoffvalue] prefix
+
+mfe   [-T temperature] [-multi] [-pseudo] [-material parameters] [-dangles treatment] [-degenerate] prefix
+
+```
+```{r run-nupack-function-update}
+run_nupack <- function(input_file, melting_temperature, exec, timed=FALSE, 
+                       multi=FALSE, paired=TRUE) {
+  #What NUPACK executable to run?
+  nupack_exec <- exec
+  
+  #Extracting file prefix:
+  file_prefix <- gsub('.in$', '', input_file)
+  
+  #Input sequence length:
+  input_seq <- read_file(input_file)
+  
+  #Running NUPACK with the input file
+  if(multi) {
+    nupack_command <- paste(nupack_exec, '-T', melting_temperature,
+                          '-material dna', '-multi', file_prefix)
+  } else {
+    nupack_command <- paste(nupack_exec, '-T', melting_temperature,
+                          '-material dna', file_prefix)
+  }
+  
+  #Importing correct output file for selected NUPACK executable:
+  if(nupack_exec == 'pairs') {
+    system(nupack_command, intern = T)
+    #Import output file 
+    output_file <- gsub('.in$', '.ppairs', input_file)
+    nupack_output <- read_lines(output_file)
+    
+    #extract base pair probabilities:
+    pair_probabilities <- tibble(lines = nupack_output) %>%
+      filter(grepl('^\\d+\\t', lines)) %>%
+      separate(lines, into = c('ibase', 'jbase', 'p'), sep = '\t') %>%
+      mutate_all(as.numeric) 
+    
+    if(paired) {
+      pair_probabilities %>%
+        filter(jbase < nchar(input_seq)+1)
+    } else {
+      pair_probabilities %>%
+        filter(jbase == nchar(input_seq)+1)
+    }
+  } else if (nupack_exec == 'mfe') {
+    system(nupack_command, intern = T)
+    #Import output file 
+    output_file <- gsub('.in$', '.mfe', input_file)
+    nupack_output <- read_lines(output_file)
+    
+    #extract MFE value:
+    mfe <- tibble(
+      input = file_prefix,
+      seq = input_seq,
+      mfe = nupack_output[15],
+      structure = nupack_output[16]
+    )
+  } else if (nupack_exec == 'pfunc') {
+    nupack_output <- system(nupack_command, intern = T)
+    
+    #extract dG and partion function:
+    pfunc <- tibble(
+      dG = nupack_output[14],
+      partition_func = nupack_output[15]
+    )
+  }
+}
+```
+
+```{r run-nupack-fun-update-test}
+mfe <- run_nupack("notebook_data/gfp_puc19_frag_5p.in", 45, exec = 'mfe')
+pfunc <- run_nupack("notebook_data/nupack_pfunc_test.in", 
+                    melting_temperature = 45, 
+                    exec = 'pfunc',
+                    multi = T)
+
+mfe
+pfunc
+```
+
+
+
+
+
+
+## 03/22/18
+
+### `-multi` option of `nupack` functions 
+
+```{r understanding-string-vectors}
+string1 <- 'this is  a string'
+string2 <- 'this is another string'
+vector_of_strings <- c('string1', 'string2')
+vector_of_string_variables <- c(string1, string2)
+
+str(string)
+str(vector_of_strings)
+str(vector_of_string_variables)
+typeof(string)
+typeof(vector_of_strings)
+typeof(vector_of_string_variables)
+length(string1)
+length(vector_of_strings)
+length(vector_of_string_variables)
+
+lapply(vector_of_string_variables, print)
+```
+
+```{r test-multiple-seq-input}
+input_seqs_test <- c(threeprime_end_seq, fiveprime_end_seq)
+
+parse_inputs <- function(string_vector) {
+  #Checking length of input vector:
+  if(length(string_vector) == 1) {
+    assembled_string <- string_vector
+    # print(assembled_string)
+  } else {
+    n <- length(string_vector)
+    distinct_species <- paste0(1:n, collapse = ' ')
+    to_file <- c(n, string_vector, distinct_species)
+    
+    write_lines(to_file, path = "notebook_data/test_output.in")
+    assembled_string <- paste0(to_file, collapse = "\n")
+    
+    # print(assembled_string)
+  }
+}
+
+test_file_input <- read_lines("notebook_data/test_output.in")
+test_file_input
+```
+
+```{r nupack-args-parse}
+args <- c('pairs' , '-T', 45, '-material', 'dna', '-multi', 'prefix')
+args2 <- c('pairs' , '-T', 45, '-material', 'dna', '', 'prefix')
+paste0(args, collapse = ' ')
+paste0(args2, collapse = ' ')
+
+
+```
+
+## 03/23/18
+
+### Free energy-based primer score
+
+During a lambda PCR reaction, there are three possible types of interactions
+involving the mega-primer and the vector template: 
+
+- Edges of the mega-primer binding to the template;
+- Edges of mega-primer binding to each other (forming a hairpin);
+- Self-binding on mega-primer edge (small hairpin structures)
+
+We can calculate the free energy and the formation probability of each of these
+complexes and evaluate if a mega-primer is good or not based on the calculated
+values. Our test dataset is the mega-primer to insert the GFP gene into the pUC19 
+plasmid at position 1500. We need a function to evaluate the thermodynamic 
+properties of a primer pair by computing the free energy of the different 
+possible strucutres listed above, and then calculating a "score" for each primer
+in the pair. The score can be calculated by
+
+$$Z_{i} = \Delta G_{i,t} - \Delta G_{i,i} - \Delta G_{i,j}$$
+ where: 
+
+- $Z_{i}$: score of primer $i$;
+- $\Delta G_{i,t}$: free energy of the complex between primer $i$ and template $t$;
+- $\Delta G_{i,i}$: free energy of a secondary structure in primer $i$;
+- $\Delta G_{i,j}$: free energy of a dimer between primer $i$ and primer $j$;
+
+## 03/26/18
+
+### Calculating test primer scores
+
+#### Function to evaluate primers
+
+```{r evaluate-primer-function, message=FALSE, warning=FALSE}
+evaluate_primer <- function(primer_object, template_seq) {
+  #Reorganizing primer object
+  primers <- primer_object %>%
+    select(-type) %>%
+    gather(fragment, seq, -id) %>%
+    mutate(
+      seq = toupper(seq),
+      fragment = gsub('_seq', '', fragment)
+    )
+  
+  #Melting temperature calculations
+  tm <- primers %>%
+    filter(grepl('annealing', fragment)) %>%
+    group_by(id, fragment) %>%
+    do(
+      tm = melt_temperature(.$seq, 1e-07, 'Mg=1')
+    ) %>%
+    unnest() 
+  
+  #Annealing temparature
+  ta <- tm %>%
+    group_by(id, fragment) %>%
+    summarise(ta = min(tm) - 3) %>%
+    filter(grepl('template', fragment)) %>%
+    select(-fragment)
+
+  #NUPACK calculations of complete sequences:
+  nupack_results <- primers %>%
+    filter(!grepl('annealing', fragment)) %>%
+    left_join(ta)
+  
+  ####Creating sequence inputs for NUPACK runs:
+  fw_primer <- nupack_results$seq[nupack_results$id=='forward']
+  rv_primer <- nupack_results$seq[nupack_results$id=='reverse']
+  tm_min <- min(nupack_results$ta)
+
+  #Self-dimer formation free energy:
+  dimers <- tribble(
+    ~primer, ~ta, ~complex, ~complex_type, ~dG,
+    'forward', 'foward', 'sdimer', nupack_pfunc(c(fw_primer, fw_primer), tm_min),
+    'reverse', 'reverse', 'sdimer', nupack_pfunc(c(rv_primer, rv_primer), tm_min),
+    'forward', 'reverse', 'hdimer', nupack_pfunc(c(fw_primer, rv_primer), tm_min),
+    'reverse', 'forward', 'hdimer', nupack_pfunc(c(rv_primer, fw_primer), tm_min)
+  ) %>%
+    unnest()
+
+  #MFE of individual primers
+  mfe <- tribble(
+    ~primer, ~complex, ~complex_type, ~mfe,
+    'forward', 'forward', 'hp', nupack_mfe(fw_primer, tm_min),
+    'reverse', 'reverse', 'hp', nupack_mfe(rv_primer, tm_min)
+  ) %>%
+    unnest() %>%
+    select(-structure, -base_pairs)
+  
+  # #Extracting region of template sequence around the insertion position:
+  # template_seq <- inputs %>%
+  #   filter(type == 'template') %>%
+  #   mutate(frag = substr(seq, 1400, 1600)) %>%
+  #   pull(frag)
+
+  #Primer-template complex free energy:
+  primer_template <- tribble(
+    ~primer, ~complex, ~complex_type, ~dG,
+    'forward', 'temp', 'ptemp', nupack_pfunc(c(fw_primer, template_seq), tm_min),
+    'reverse', 'temp', 'ptemp', nupack_pfunc(c(rv_primer, template_seq), tm_min)
+  ) %>%
+    unnest()
+  
+  #Creating output;
+  results <- bind_rows(dimers, mfe, primer_template)
+  return(results)
+  
+}
+```
+
+```{r evalating-test-primers}
+template_seq <- inputs %>%
+    filter(type == 'template') %>%
+    mutate(frag = substr(seq, 1400, 1600)) %>%
+    pull(frag)
+  
+system.time({results <- evaluate_primer(primers, template_seq)})
+results
+```
+
+The problem with the current code of the `evaluate_primer` function is that the 
+runtime for the `nupack_pfunc` function to calculate the $\Delta G$ of the 
+primer-template complex is too long (~120s). The `template_frag` sequence is 
+200 bp long (100 bp flanking the insert position of each side), and it might be
+too long. I can try to reduce the runtime by reducing the size of `template_frag`.
+
+#### Benchmarking `evaluate_primer` function with different fragment sizes
+
+```{r generate-template-fragments}
+flank_length <- c(40,50,60,70,80,90,100)
+template_seq <- inputs %>%
+  filter(type == 'template') %>%
+  pull(seq)
+
+fragments <- lapply(flank_length, 
+                    function(x) substr(template_seq, (1500-x), (1500+x)))
+test_functions <- lapply(fragments, 
+                         function(x) call("evaluate_primer", quote(primers), x))
+
+```
+
+```{r benchmark-evaluate-primers, message=FALSE, warning=FALSE}
+library(microbenchmark)
+microbenchmark(
+  list = setNames(test_functions, as.character(flank_length)), 
+  times = 5)
+
+```
+
+#### Calculating $Z_i$ score
+
+Now that we have a function to calculate all the free energies for the different 
+possible complexes between the primers and template, we can calculate the $Z_i$
+score for each primer:
+
+```{r primer-score}
+primer_score <- results %>%
+  select(-complex, -partition_func) %>%
+  spread(complex_type, dG) %>%
+  mutate_at(vars(hdimer, hp, ptemp, sdimer), funs(as.numeric(.))) %>%
+  mutate(z = ptemp - (sdimer + hdimer + hp))
+
+primer_score
+```
+
+We can interpret the $Z_i$ score as the stability of the template-primer complex, 
+taking into consideration the binding of the pimers to each other and to 
+themselves. **Lower $Z_i$ values indicate that the primer has a higher affinity** 
+**to the template**, which is what we want. 
+
+## 03/27/18
+
+### Implementing S4 Classes in `lambdaPrimeR`
+
+#### `Template` class
+
+The `Template` class corresponds to the target gene and plasmid vector sequences
+inputs to the 
+
+```{r template-class}
+.TemplateClass <- setClass("TemplateClass", contains = c("data.frame"))
+.TemplateClass
+```
+
+```{r template-class-constructor}
+.TemplateClass()
+```
+I need to make sure that the value supplied to the `TemplateClass` constructor 
+is a data frame, so we need a helper function:
+
+```{r constructor-helper-function}
+TemplateClass <- function(df, ...) .TemplateClass(df, ...)
+TemplateClass()
+```
+
+
+```{r template-class-object}
+df <- inputs %>%
+  filter(type == "template")
+
+template_object <- TemplateClass(df)
+template_object
+```
+
+I think the basic slots on the `TemplateClass` class should be:
+
+- `path`: a string containing the path to the input fasta file;
+- `data`: data frame with the sequence information;
+
+```{r template-class-update}
+.TemplateClass <- setClass("TemplateClass", 
+                           contains = c("data.frame"))
+.TemplateClass
+
+```
+
+We can create two subclasses from `TemplateClass` that will represent each 
+different type of templates (target and vectors):
+
+```{r target-and-vector-classes}
+.TargetClass <- setClass("TargetClass",
+                         contains = c("TemplateClass"))
+
+.VectorClass <- setClass("VectorClass",
+                         contains = c("TemplateClass"))
+
+
+.TargetClass
+.VectorClass
+```
+
+## 03/29/18
+
+### Updating `read_sequence` function to work with the S4 class system
+
+We first need to write a helper function to create new `TargetClass` and 
+`VectorClass` objects from an input fata frame:
+
+```{r subclasses-constructor-functions}
+TargetClass <- function(df, ...) .TargetClass(df, ...)
+VectorClass <- function(df, ...) .VectorClass(df, ...)
+```
+
+We can change the `read_sequence` function to read a fasta file and assign the 
+input to a specific class depending on the value of the `input_type` argument.
+
+```{r read-sequences-class-update}
+read_sequences <- function(file, input_type = c('target', 'vector'),
+                           id_field = NULL, separator = NULL) {
+  
+  #Checking input type:
+  type <- match.arg(input_type)
+  
+  #Reading fasta file into a column:
+  raw <- tibble(text = read_file(file))
+  
+  #Converting the raw text column into the correct format:
+  df <- raw %>%
+    separate_rows(text, sep = '\n>') %>%
+    separate(text, into = c('header', 'seq'), sep = '\n', extra = 'merge') %>%
+    mutate(
+      path = file, 
+      type = input_type,
+      seq = stringr::str_replace_all(seq, '\n', ''),
+      header = stringr::str_replace(header, '>', ''),
+      length = nchar(seq)
+    )
+  
+  #Checking if optional parameters were passed
+  if(is.null(id_field)) {
+    id_field <- 'name'
+  }
+  if(is.null(separator)) {
+    separator <- '\\|'
+  }
+  
+  #Creating sequence id from seq header
+  df <- df %>%
+    separate(header, into = id_field, remove = F, extra = 'drop', sep = separator)
+  
+  #Checking what type of input was provided and creating appropriate class obj.:
+  # object <- switch (input_type,
+  #   'target' = TargetClass(df),
+  #   'vector' = VectorClass(df)
+  # )
+  
+  return(df)
+  
+  #Appending new input to input dataframe if input_df object was provided:
+  # if(!is.null(input_df)) {
+  #   input_df <- bind_rows(input_df, df)
+  # } else {
+  #   df
+  # }
+}
+
+```
+
+```{r testing-class-version-read-sequences}
+target_object <- read_sequences(target, input_type = 'target')
+vector <- read_sequences(template, input_type = 'vector')
+
+```
+
+## 03/30/18
+
+### Testing primer score function with variations of test primer
+
+#### Increasing lengths of vector and target annealing regions
+
+In order to test how the length of a primer affects the $Z_i$ score, I'll use the
+`get_overlaps` function to extract the vector and target annealing regions from
+the input sequences with increasing lengths:
+
+```{r create-multiple-primers}
+annealing_region_lengths <- c(10:30)
+overlaps <- lapply(annealing_region_lengths, 
+                   function(x) get_overlaps(inputs, position = 1500, 
+                                            vector_ovlp_length = x,
+                                            target_ovlp_length = x))
+
+var_length_primers <- lapply(overlaps, function(x) create_primer_pair(x))
+
+```
+
+```{r evaluate-primers, message=FALSE, warning=FALSE}
+primer_eval <- lapply(var_length_primers, 
+                      function(x) evaluate_primer(x, template_seq))
+```
+
+```{r multiple-length-primer-score}
+names(primer_eval) <- annealing_region_lengths
+primer_eval_df <- bind_rows(primer_eval, .id = 'length') %>%
+  mutate(
+    length = as.numeric(length),
+    dG = as.numeric(dG)
+  )
+
+calculate_primer_score <- function(primer_eval_df) {
+  score <- primer_eval_df %>%
+  select(-complex, -partition_func) %>%
+  spread(complex_type, dG) %>%
+  mutate_at(vars(hdimer, hp, ptemp, sdimer), funs(as.numeric(.))) %>%
+  mutate(z = ptemp - (sdimer + hdimer + hp))
+}
+
+primer_scores <- primer_eval_df %>%
+  group_by(length) %>%
+  do(
+    calculate_primer_score(.)
+  )
+```
+
+
+```{r plot-score-vs-primer-length}
+primer_scores %>%
+  ggplot(., aes(x=length, y=z)) +
+  facet_grid(~ primer) +
+  geom_point()
+```
+```{r plot-dG-vs-primer-length}
+primer_eval_df %>%
+  ggplot(., aes(x=length, y=dG, color = primer)) +
+  facet_grid(~complex_type) +
+  geom_point()
+
+```
+
+It seems like that increasing the length of both the template and target 
+annealing regions of the primers increased the value of the $Z_i$ score,
+indicating that as both edges of the primer gets longer. In the second plot, 
+we can that $\Delta G_{i,t}$, the free energy of the complex between the primer 
+and the template (`ptemp`) decreases as the primers get longer. The presence of
+the longer dangling tagert-annealing region of the pimer could be casuing this 
+reduction in $\Delta G_{i,t}$. I need to modify the `get_overlaps` function to 
+only increase one of the edges when doing this type of analysis. 
+
+#### Primers with variation only on the length of the vector-annealing region
+
+We first need to update the `get_overlaps` function to allow different lenghts 
+for the different overlapping regions:
+
+```{r get-overlaps-fun-update}
+get_overlaps <- function(sequence_inputs, position=NULL, 
+                         vector_ovlp_length=NULL,
+                         target_ovlp_length=NULL) {
+  #Initialize empty overlap object
+  overlaps <- tibble(
+    id = character(),
+    type = character(),
+    origin = character(),
+    seq = character()
+  )
+  
+  #Function to find overlaps on each input type:
+  find_overlaps <- function(data) {
+    #Checking what type of input was passed:
+    if(data$type == 'template') {
+      length <- vector_ovlp_length
+      #Using default overlap length of 20 if not provided:
+      overlap_length <- ifelse(is.null(length), 20, length)
+      #Extracting overlaps
+      overlap_left <- substr(data$seq, (position-overlap_length), position)
+      overlap_right <- substr(data$seq, (position+1), (overlap_length+position+1))
+      #Populating overlap object:
+      overlaps <- overlaps %>%
+        add_row(id = 'left', type = 'overlap', origin = 'template', seq = overlap_left) %>%
+        add_row(id = 'right', type = 'overlap', origin = 'template', seq = overlap_right)
+    } else {
+      #Using default overlap length of 15 if not provided:
+      length <- target_ovlp_length
+      overlap_length <- ifelse(is.null(length), 15, length)
+      #Extracting overlaps
+      overlap_left <- substr(data$seq, 1, overlap_length)
+      overlap_right <- substr(data$seq, data$length-overlap_length, data$length)
+      #Populating overlap object:
+      overlaps <- overlaps %>%
+        add_row(id = 'left', type = 'overlap', origin = 'target', seq = overlap_left) %>%
+        add_row(id = 'right', type = 'overlap', origin = 'target', seq = overlap_right)
+    }
+  }
+  
+  #Extracting overlaps
+  sequence_inputs %>%
+    group_by(type) %>%
+    do(find_overlaps(.)) %>%
+    ungroup()
+}
+
+
+```
+
+Let's recalculate the primer scores with just the vector-annealing region
+increasing in size:
+
+```{r evaluate-primers-increasing-vector-region}
+overlaps <- lapply(annealing_region_lengths, 
+                   function(x) get_overlaps(inputs, position = 1500,
+                                            vector_ovlp_length = x))
+var_length_primers <- lapply(overlaps, create_primer_pair)
+varying_vector_reg <- lapply(var_length_primers, 
+                      function(x) evaluate_primer(x, template_seq))
+```
+
+```{r vector-annealing-regions-primer-score}
+names(varying_vector_reg) <- annealing_region_lengths
+vector_reg_primer_eval_df <- bind_rows(varying_vector_reg, .id = 'length') %>%
+  mutate(
+    length = as.numeric(length),
+    dG = as.numeric(dG)
+  )
+
+vector_reg_primer_scores <- vector_reg_primer_eval_df %>%
+  group_by(length) %>%
+  do(
+    calculate_primer_score(.)
+  )
+```
+
+```{r plot-score-vs-vector-anneling-length}
+vector_reg_primer_scores %>%
+  ggplot(., aes(x=length, y=z)) +
+  facet_grid(~ primer) +
+  geom_point()
+
+vector_reg_primer_eval_df %>%
+  ggplot(., aes(x=length, y=dG, color = primer)) +
+  facet_grid(~complex_type) +
+  geom_point()
+```
+
+```{r}
+scores_merged <- bind_rows(vector_reg_primer_scores, primer_scores, .id = 'id') %>%
+  mutate(id = ifelse(id == 1, 'increase_vector', 'increase_both'))
+
+thermodynamics_merged <- bind_rows(vector_reg_primer_eval_df, primer_eval_df, 
+                                   .id = 'id') %>%
+    mutate(id = ifelse(id == 1, 'increase_vector', 'increase_both'))
+
+scores_merged %>%
+  ggplot(., aes(x=length, y=z, color = id)) +
+  facet_grid(~primer)+
+  geom_point()+
+  plot_theme
+
+thermodynamics_merged %>%
+  ggplot(., aes(x=length, y=dG, color = id)) +
+  facet_grid(primer~complex_type) +
+  geom_point()+
+  plot_theme
+```
+
+The changes in $Z_i$ score when just the vector-annealing region of the primer
+is modified are very similar to when both regions are modified. However, the
+rate of how the $Z$ score reduces with the length of the annealing regions seems
+to be lower when the length of the target annealing region of the primer is kept
+constant. 
+
+#### Benchmarking `evaluate_primers` function with primer with inscreasing length 
+
+```{r benchmark-primer-length, warning=FALSE, message=FALSE}
+library(microbenchmark)
+test_functions <- lapply(var_length_primers, 
+                         function(x) call("evaluate_primer", x, quote(template_seq)))
+
+microbenchmark(
+  list = setNames(test_functions, as.character(annealing_region_lengths)), 
+  times = 1)
+
+```
+
+## 03/31/18
+
+### Object validation function for `TemplateClass`
+
+In order to make sure that the `TemplateClass` will have the correct fields and 
+data format, we need to write a validation function that will check if the 
+input is a data frame with the minimum required columns. We need at least the 
+following columns for each template input:
+
+ - `path`: path to input file;
+ - `header`: complete string of the sequence's FASTA header;
+ - `name`: parsed fragment of the sequence header that will be used as the 
+ template name;
+ - `sequence`: template sequence;
+ - `length`: sequence length;
+ - `id`: internal numeric id that will group a set of `Target`, `VectorClass` and 
+ `Primer` objects;
+ 
+ Let's first find out how to test the type of a column against a defined column 
+ type:
+ 
+```{r}
+required_columns <- tribble(
+  ~cols, ~req_class,
+  'path','character', 
+  'header','character',
+  'id','character', 
+  'seq','character', 
+  'type','character', 
+  'length','integer'
+)
+
+column_types <- as.data.frame(lapply(df, class)) %>%
+  gather(cols, test_class)
+
+discrepancies <- full_join(required_columns, column_types) %>%
+  mutate(test = ifelse(req_class == test_class, TRUE, FALSE)) %>%
+  do(
+    msg = case_when(
+      is.na(.$test) ~ paste("Missing required column:", .$cols),
+      !(.$test) ~ paste("Column ", .$cols, " type is incorrect. ",
+                        "Required type is ", .$req_class, ", current type is ",
+                        .$test_class, ".", sep = ''),
+      (.$test) ~ NA_character_
+    )
+  ) %>%
+  unnest() %>%
+  filter(!is.na(msg))
+```
+ 
+We can now write a validation function for out `TemplateClass`:
+
+```{r template-validity-class}
+validate_template <- function(object) {
+  errors <- NULL
+
+  #Checking if object is data frame:
+  if(!is.data.frame(object)) {
+      errors <- c(errors, "Input was not a data frame")
+      return(FALSE)
+  }
+  
+  #Checking if required columns are present with the correct format:
+  required_columns <- tribble(
+    ~cols, ~req_class,
+    'path','character', 
+    'header','character',
+    'name','character', 
+    'seq','character', 
+    'type','character', 
+    'length','numeric'
+  )
+  #Creating data frame with column types:
+  column_types <- as.data.frame(lapply(df, class)) %>%
+    gather(cols, test_class)
+  
+  #Checking column types against required columns:
+  discrepancies <- full_join(required_columns, column_types) %>%
+    mutate(test = ifelse(req_class == test_class, TRUE, FALSE)) %>%
+    do(
+      msg = case_when(
+        is.na(.$test) ~ paste("Missing required column: ", .$cols, ";\n", sep = ''),
+        !(.$test) ~ paste("Column ", .$cols, " type is incorrect: ",
+                          "required type is ", .$req_class, ", current type is ",
+                          .$test_class, ";\n", sep = ''),
+        (.$test) ~ NA_character_
+      )
+    ) %>%
+    unnest() %>%
+    filter(!is.na(msg))
+  
+  errors <- c(errors, discrepancies$msg)
+  return(errors)
+}
+
+```
+
+Let's add this validation function to the `TargetClass` constructor function:
+
+```{r targetclass-constructor-w-validation}
+TargetClass <- function(df, ...) {
+  #Calling validation function:
+  errors <- validate_template(df)
+  
+  if(length(errors) != 0) {
+    message(errors)
+    
+    
+    # return(FALSE)
+  }
+  .TargetClass(df, ...)
+}  
+
+df <- inputs %>%
+  filter(type == "template")
+
+test_validation_func <- TargetClass(df)
+```
+
+### Adding method to get overlaps for both `Target` and `VectorClass`
+
+#Create generic function and methods for `get_annealing_regions`
+
+```{r get-overlap-methods}
+setGeneric("get_annealing_regions", 
+           function(template, position = NULL, min_length = NULL, 
+                    max_length = NULL, ...) {
+             standardGeneric("get_annealing_regions")
+})
+```
+
+Let's create methods for `get_annealing_regions` that will extract a different
+region from depending on the type of template:
+
+```{r get-annealing-regios-methods}
+setMethod("get_annealing_regions", 
+  signature = "TargetClass",
+  function(template, min_length = NULL, max_length = NULL) {
+    #Using minimum allowed length as the length of the annealing region; 
+    #otherwise use the default of 15 bp.
+    length <- ifelse(is.null(min_length), 15, min_length)
+    
+    #Saving sequence slot from template class in a variable:
+    seq <- template@seq
+    seq_length <- template@length
+    
+    #When extracting the annealing regions from the target sequence, we need to 
+    #get the 5' and 3' ends of the gene sequence:
+    #Extracting overlaps
+    target_annealing_left <- substr(seq, 1, length)
+    target_annealing_right <- substr(seq, seq_length-length, length)
+    
+    #Adding new information to Target object:
+    # annealing_regions <- tibble(
+    #   min_length = integer(),
+    #   max_length = integer(),
+    #   annealing_reg_left_beg = integer(),
+    #   annealing_reg_left_end = integer(),
+    #   annealing_reg_right_beg = integer(),
+    #   annealing_reg_right_end = integer(),
+    #   annealing_reg_left_seq = character(),
+    #   annealing_reg_right_seq = character()
+    # )
+    
+    annealing_regions <- tibble(
+      min_length = min_length,
+      max_length = max_length,
+      annealing_reg_left_beg = 1,
+      annealing_reg_left_end = length,
+      annealing_reg_right_beg = seq_length - length,
+      annealing_reg_right_end = seq_length,
+      annealing_reg_left_seq = target_annealing_left,
+      annealing_reg_right_seq = target_annealing_right
+    )
+    
+    template <- bind_cols(template, annealing_regions)
+  }
+)
+
+```
+
+```{r}
+target_input <- system.file('extdata', 'GFP sequence.fasta', package = "lambdaPrimeR")
+target_df <- read_sequences(target_input, input_type = 'target')
+target_object <- TargetClass(target_df)
+
+# test_getannealing_methods <- get_annealing_regions(target_object, 
+#                                                    min_length = 15)
+```
 
 

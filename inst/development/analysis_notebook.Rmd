@@ -1,0 +1,180 @@
+---
+title: "`lambdaPrimeR` analysis notebook"
+author: Pedro Ivo Guimarães
+output: 
+  html_notebook:
+    toc: yes
+---
+
+```{r libraries-and-options, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(stringr)
+devtools::load_all(pkg = "~/lambdaPrimeR/")
+```
+
+# May 
+
+## 05/03/18
+
+### Importing Imen's lambda PCR primers
+
+```{r importing-primers}
+path <- system.file('extdata', 'imen_primers.csv', package = "lambdaPrimeR")
+imen_primers <- read_csv(path)
+```
+```{r}
+imen_primers
+```
+
+We need to isolate the primer sequence into the target and vector annealing 
+sequences by splitting the sequence string on the first uppercase character:
+
+```{r}
+imen_primers <- imen_primers %>%
+  mutate(seq_split = gsub('[[:lower:]]([[:upper:]])', ',\\1', seq)) %>%
+  separate(seq_split, into = c('vector_annealing_seq', 'target_annealing_seq'), sep = ',')
+```
+
+## 05/04/2018
+
+### Locating insertion position based on primer sequence
+
+I need to locate the insertion position that each target gene was inserted into 
+pUC19 based on the sequence of the vector annealing parts of the primer sequences.
+We can do this by isolating the vector annealing sequence from the forward primers 
+and checking where they appear in the vector sequence used by Imen. 
+
+Let's import the vector sequence that Imen used to design her primers (pUC19):
+```{r}
+vector_path <- system.file('extdata', 'pUC19_imen.fasta', package = "lambdaPrimeR")
+puc19_imen <- read_sequences_noclass(vector_path, input_type = 'vector')
+```
+
+We can now locate the vector annealing sequences from each forward primer in the 
+pUC19 sequence:
+
+```{r}
+insertion_positions <- imen_primers %>%
+  mutate(vector_annealing_seq = case_when(
+    orientation == 'forward' ~ toupper(vector_annealing_seq),
+    orientation == 'reverse' ~ toupper(reverse_complement(vector_annealing_seq))
+  )) %>%
+  group_by(target_name, orientation) %>%
+  do(seq_match = as.tibble(str_locate(puc19_imen$seq, toupper(.$vector_annealing_seq)))) %>%
+  unnest()
+```
+
+```{r}
+insertion_positions
+```
+
+There are some interesting results. As we can see on the table above, the coordinates
+of the reverse primers vector annealing region matches in the pUC19 sequence are not right
+after the matches for the forward primers. That means that Imen designed these 
+primers to swap a chunk of the pUC19 sequence between 395-453 bp for the target
+sequence.
+
+We can use this coordinates to extract the sequence around the insertion sites 
+for each target gene:
+
+```{r}
+imen_primers <- left_join(imen_primers, insertion_positions)
+imen_primers <- imen_primers %>%
+  group_by(target_name, orientation) %>%
+  mutate(vector_frag_seq = substr(
+    puc19_imen$seq, 
+    start-nchar(vector_annealing_seq), 
+    end+nchar(vector_annealing_seq)
+  ))
+```
+
+```{r}
+tofile <- imen_primers %>%
+  select(target_name, orientation, seq, vector_annealing_seq, target_annealing_seq)
+write_csv(tofile, "~/lambdaPrimeR/inst/extdata/imen_primers_toeval.csv")
+```
+
+## 05/06/18
+
+### Locating target annealing region on target sequences of `imen_primers`
+
+In order to have a complete `Primer` object after loading primer sequences from 
+a .csv file, we need to get the start and end coordinates of the target
+annealing regions of each primer:
+
+```{r}
+target_anneal_coord <- imen_primers %>%
+  select(target_name, target_seq, orientation, target_annealing_seq) %>%
+  mutate(target_annealing_seq = case_when(
+    orientation == 'forward' ~ toupper(target_annealing_seq),
+    orientation == 'reverse' ~ toupper(reverse_complement(target_annealing_seq))
+  )) %>%
+  group_by(target_name, orientation) %>%
+  do(seq_match = as.tibble(str_locate(.$target_seq, toupper(.$target_annealing_seq)))) %>%
+  unnest() %>%
+  rename(
+    target_start = start, 
+    target_end = end
+  )
+```
+
+Adding coordinates to `imen_primers`:
+
+```{r}
+imen_primers <- left_join(imen_primers, target_anneal_coord)
+```
+
+## 06/01/18
+
+### Redesigning Imen's primers
+
+```{r}
+insertion_positions %>%
+  group_by(target_name) %>%
+  mutate(deletion_length = start[orientation == 'reverse'] - end[orientation == 'forward']-1)
+```
+
+```{r}
+imen_target_input <- system.file('extdata', 'imen_primer_targets.csv', package = "lambdaPrimeR")
+imen_vector_input <- system.file('extdata', 'pUC19_imen.fasta', package = "lambdaPrimeR")
+
+input_pairs <- pimers_table %>%
+  select(target_name, vector_name) %>%
+  rename(
+    target = target_name, 
+    vector = vector_name
+  )
+
+imen_designs <- read_inputs(imen_target_input, 
+                            imen_vector_input, 
+                            target_vector_pairs = input_pairs)
+```
+
+```{r}
+imen_designs <- lapply(imen_designs, function(x)create_primers(x, position = 377, deletion_length = 57))
+scores <- lapply(imen_designs, function(x) evaluate_primers(x))
+scores <- bind_rows(scores, .id = 'run_id')
+```
+
+```{r}
+lambdprimer_scores <- scores %>%
+  select(-id, -run_id) %>%
+  mutate(origin = 'lpr')
+
+imen_scores <- primer_scores_imen %>%
+  select(-id) %>%
+  mutate(origin = 'imen')
+
+score_comparison <- bind_rows(lambdprimer_scores, imen_scores) %>%
+  group_by(primer) %>%
+  do(
+    ttest = t.test(.$z[.$origin == 'imen'], .$z[.$origin == 'lpr'])
+  ) 
+
+score_avg <- bind_rows(lambdprimer_scores, imen_scores) %>%
+  group_by(primer, origin) %>%
+  summarise(z_sd = sd(z), z = mean(z)) 
+```
+
+
+
